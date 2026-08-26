@@ -99,3 +99,12 @@
   was independently re-verified as correct; only the test needed fixing. Fixed by
   resetting the cache to `None` immediately before the race, making the test
   self-contained regardless of execution order.
+- **Extracted (post-tag): `Aws_tls` moved out to the standalone `https-eio` package.**
+  The exact same TLS wrapper (rounds 4–6 above, plus the CA-bundle logic) turned out
+  to also be duplicated byte-for-byte in obs-loki-eio's `Obs_loki_tls`,
+  obs-prometheus-eio's `Obs_prometheus_tls`, and Sun's in-tree `Kafka_service_tls` —
+  the round-4 RNG-seeding bug had to be manually ported across all four. `Aws_tls` is
+  deleted; `aws_http.ml` now depends on `https-eio` directly. `https-eio` also
+  replaces the hand-rolled, Linux/macOS-only CA-bundle path list with the maintained
+  `ca-certs` package. The TLS regression tests (real handshake, concurrent-domain
+  cache race) moved to `https-eio`'s own test suite.
