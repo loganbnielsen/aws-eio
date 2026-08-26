@@ -48,7 +48,7 @@ let test_sts_get_caller_identity () =
           ()
       with
       | Error e -> Alcotest.failf "STS GetCallerIdentity request failed: %s" (Aws_error.to_string e)
-      | Ok (status, body) ->
+      | Ok (status, _headers, body) ->
         Alcotest.(check int) "HTTP 200" 200 status;
         Alcotest.(check bool) "response contains GetCallerIdentityResult" true
           (contains_substring ~needle:"GetCallerIdentityResult" body);

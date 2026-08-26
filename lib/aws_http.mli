@@ -19,7 +19,7 @@ val request
   -> headers:(string * string) list
   -> ?body:string
   -> unit
-  -> (int * string, Aws_error.t) result
+  -> (int * (string * string) list * string, Aws_error.t) result
 (** Unsigned request. This is the escape hatch every credential-bootstrap
     call needs (STS's AssumeRoleWithWebIdentity, the IMDSv2 token/metadata
     endpoints) — those calls happen *before* any credentials exist to sign
@@ -31,8 +31,10 @@ val request
     carry a known-retryable [x-amzn-errortype] such as [ThrottlingException]
     — see [is_retryable_response] in [aws_http.ml]); a non-2xx, non-retryable
     response is returned as [Error (Http_error (status, body))] rather than
-    retried. Pass a short [?timeout] for SSRF-adjacent endpoints like IMDS —
-    see aws-audit.md. *)
+    retried (response headers are only returned on success — the error case
+    carries just status and body, unchanged, to keep this a narrow addition).
+    Pass a short [?timeout] for SSRF-adjacent endpoints like IMDS — see
+    aws-audit.md. *)
 
 val signed_request
   :  ?max_retries:int
@@ -66,11 +68,13 @@ val signed_request
           [extra_headers] if the target service requires that header). *)
   -> ?body:string
   -> unit
-  -> (int * string, Aws_error.t) result
+  -> (int * (string * string) list * string, Aws_error.t) result
 (** SigV4-signs the request (adding [Host], [X-Amz-Date], and
     [X-Amz-Security-Token] if [session_token] is given, then [Authorization])
     before sending it over HTTPS. Always HTTPS — AWS APIs do not offer plain
-    HTTP endpoints worth signing for. *)
+    HTTP endpoints worth signing for. Response headers are returned exactly
+    as the server sent them (no case-normalization — compare case-
+    insensitively), on success only, same caveat as {!request} above. *)
 
 (** {2 Exposed for testing} *)
 

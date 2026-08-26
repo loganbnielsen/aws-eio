@@ -202,7 +202,8 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
       when is_retryable_response ~status ~headers:resp_headers ~body:resp_body && n < max_retries ->
       Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
       attempt (n + 1)
-    | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
+    | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
+      Ok (status, resp_headers, resp_body)
     | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
     | Error _ when n < max_retries ->
       Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
@@ -293,7 +294,8 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
                && n < Option.value max_retries ~default:3 ->
           Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
           attempt (n + 1)
-        | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
+        | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
+          Ok (status, resp_headers, resp_body)
         | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
         | Error _ when n < Option.value max_retries ~default:3 ->
           Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);

@@ -86,7 +86,7 @@ let test_head_response_never_reads_a_body () =
   in
   match result with
   | Error e -> Alcotest.fail (Aws_error.to_string e)
-  | Ok (status, body) ->
+  | Ok (status, _headers, body) ->
     Alcotest.(check int) "status" 200 status;
     Alcotest.(check string) "HEAD response body is empty despite Content-Length" "" body
 
@@ -101,7 +101,7 @@ let test_204_response_never_reads_a_body () =
   in
   match result with
   | Error e -> Alcotest.fail (Aws_error.to_string e)
-  | Ok (status, body) ->
+  | Ok (status, _headers, body) ->
     Alcotest.(check int) "status" 204 status;
     Alcotest.(check string) "204 response body is empty despite Content-Length" "" body
 
@@ -128,7 +128,7 @@ let test_request_body_is_received_by_server () =
   in
   match result with
   | Error e -> Alcotest.fail (Aws_error.to_string e)
-  | Ok (status, echoed_body) ->
+  | Ok (status, _headers, echoed_body) ->
     Alcotest.(check int) "status" 200 status;
     Alcotest.(check string) "server received the exact body sent" body echoed_body
 
@@ -140,7 +140,7 @@ let test_retries_429_once () =
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
-  let status, body =
+  let status, _headers, body =
     match result with
     | Ok v -> v
     | Error e -> Alcotest.fail (Aws_error.to_string e)
@@ -220,12 +220,35 @@ let test_retries_body_only_throttling_error () =
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
-  let status, body =
+  let status, _headers, body =
     match result with Ok v -> v | Error e -> Alcotest.fail (Aws_error.to_string e)
   in
   Alcotest.(check int) "status" 200 status;
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
+
+(* Regression test for a gap found while designing s3-eio: read_response has
+   always parsed response headers internally (used for retry classification),
+   but request/signed_request discarded them before returning to the caller
+   — a client that needs Content-Length/ETag/Last-Modified from a HEAD
+   response (the entire point of HTTP HEAD) had no way to get them. Fixed by
+   threading resp_headers through to the success case; this test pins that
+   contract down so it can't silently regress back to (status, body). *)
+let test_response_headers_are_returned () =
+  Eio_main.run @@ fun env ->
+  let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nETag: \"abc123\"\r\n\r\n" in
+  with_raw_server env ~raw_response @@ fun ~port ->
+  let result =
+    Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
+      ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[] ()
+  in
+  match result with
+  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Ok (_status, headers, _body) ->
+    Alcotest.(check (option string)) "ETag header present"
+      (Some "\"abc123\"")
+      (List.assoc_opt "ETag" headers)
 
 let () =
   Alcotest.run "aws_http"
@@ -242,6 +265,8 @@ let () =
         [ Alcotest.test_case "HEAD response never reads a body" `Quick
             test_head_response_never_reads_a_body;
           Alcotest.test_case "204 response never reads a body" `Quick test_204_response_never_reads_a_body;
+          Alcotest.test_case "response headers are returned to the caller" `Quick
+            test_response_headers_are_returned;
         ] );
       ( "wire_resource",
         [ Alcotest.test_case "matches strict SigV4 encoding, not Uri's" `Quick

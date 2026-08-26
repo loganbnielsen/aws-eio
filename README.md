@@ -150,7 +150,7 @@ val request
   :  ?max_retries:int (* default 3 *) -> ?timeout:float (* default 10.0s *)
   -> net:_ Eio.Net.t -> clock:_ Eio.Time.clock
   -> meth:Http.Method.t -> uri:string -> headers:(string * string) list -> ?body:string
-  -> unit -> (int * string, Aws_error.t) result
+  -> unit -> (int * (string * string) list * string, Aws_error.t) result
 
 val signed_request
   :  ?max_retries:int -> ?timeout:float
@@ -161,7 +161,7 @@ val signed_request
   -> ?query:(string * string) list -> ?extra_headers:(string * string) list
   -> ?payload_hash:string (* override the computed hash, e.g. "UNSIGNED-PAYLOAD" *)
   -> ?body:string
-  -> unit -> (int * string, Aws_error.t) result
+  -> unit -> (int * (string * string) list * string, Aws_error.t) result
 ```
 
 **Does not use `cohttp-eio`'s `Client`.** That client always derives the wire request
