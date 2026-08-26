@@ -3,4 +3,4 @@
  (public_name aws-eio)
  (wrapped false)
  (modules Aws_error Aws_sigv4 Aws_tls Aws_http Aws_credentials)
- (libraries digestif eio eio.unix unix uri cohttp-eio http tls-eio x509 domain-name ptime yojson))
+ (libraries digestif eio eio.unix unix uri http tls-eio x509 domain-name ptime yojson))

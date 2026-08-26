@@ -26,6 +26,52 @@ let with_retry_server env f =
     ~finally:(fun () -> Eio.Promise.resolve stop_r ())
     (fun () -> f ~port ~hits)
 
+let with_echo_server env f =
+  Eio.Switch.run @@ fun sw ->
+  let stop, stop_r = Eio.Promise.create () in
+  let callback _conn _req body =
+    let received = Eio.Buf_read.(parse_exn take_all) body ~max_size:4096 in
+    Cohttp_eio.Server.respond_string ~status:`OK ~body:received ()
+  in
+  let server = Cohttp_eio.Server.make ~callback () in
+  let socket = Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port =
+    match Eio.Net.listening_addr socket with
+    | `Tcp (_, port) -> port
+    | _ -> failwith "unexpected address family"
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      Cohttp_eio.Server.run ~stop ~on_error:(fun _ -> ()) socket server;
+      `Stop_daemon);
+  Fun.protect ~finally:(fun () -> Eio.Promise.resolve stop_r ()) (fun () -> f ~port)
+
+(* Regression test for a blocker an independent reviewer caught with a raw
+   TCP capture: write_request never sent Content-Length, so a spec-compliant
+   server (RFC 7230 3.3.2/3.3.3) treats a request with no Content-Length and
+   no Transfer-Encoding as having NO body at all — the bytes still went out
+   on the wire, just unattributed to the request. This broke every
+   body-carrying call this package makes, including Aws_credentials's own
+   EKS IRSA bootstrap (AssumeRoleWithWebIdentity). The server here echoes
+   back whatever body it actually received as a request body (via cohttp
+   -eio's own request parsing, which strictly follows Content-Length/
+   Transfer-Encoding framing) — if this test passes, a real HTTP/1.1 server
+   really does see the body. *)
+let test_request_body_is_received_by_server () =
+  Eio_main.run @@ fun env ->
+  with_echo_server env @@ fun ~port ->
+  let body = "Action=AssumeRoleWithWebIdentity&RoleArn=foo&WebIdentityToken=bar" in
+  let result =
+    Aws_http.request ~net:env#net ~clock:env#clock ~meth:`POST
+      ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[ ("Content-Type", "application/x-www-form-urlencoded") ]
+      ~body ()
+  in
+  match result with
+  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Ok (status, echoed_body) ->
+    Alcotest.(check int) "status" 200 status;
+    Alcotest.(check string) "server received the exact body sent" body echoed_body
+
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env @@ fun ~port ~hits ->
@@ -76,6 +122,10 @@ let test_wire_resource_s3_unnormalized () =
 let () =
   Alcotest.run "aws_http"
     [ ("retry", [ Alcotest.test_case "429 is retried" `Quick test_retries_429_once ]);
+      ( "request body",
+        [ Alcotest.test_case "POST body is received by a spec-compliant server" `Quick
+            test_request_body_is_received_by_server;
+        ] );
       ( "wire_resource",
         [ Alcotest.test_case "matches strict SigV4 encoding, not Uri's" `Quick
             test_wire_resource_matches_strict_sigv4_encoding;

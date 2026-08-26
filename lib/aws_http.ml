@@ -42,12 +42,28 @@ let connect ~sw ~net ~scheme ~host ~port =
   | addr :: _ -> Eio.Net.connect ~sw net addr
   | [] -> failwith ("Aws_http: cannot resolve host " ^ host)
 
+(* Every HTTP/1.1 request with a body needs Content-Length (or
+   Transfer-Encoding, which this client never uses) or a spec-compliant
+   server treats it as having no body at all (RFC 7230 3.3.2/3.3.3) — the
+   bytes go out on the wire but aren't attributed to the request. Added here
+   defensively, not just by signed_request, so every caller through this
+   transport (including Aws_credentials's unsigned STS/IMDS calls) gets it
+   for free; skipped if the caller already supplied one, to avoid a
+   duplicate header when signed_request has already added it (see below —
+   signed_request adds it to the *signed* header set too, which must happen
+   before Aws_sigv4.sign, so it can't be left to this function alone). *)
 let write_request flow ~meth ~resource ~headers ~body =
+  let has_content_length = List.exists (fun (k, _) -> String.lowercase_ascii k = "content-length") headers in
+  let headers =
+    match body with
+    | Some b when not has_content_length -> headers @ [ ("Content-Length", string_of_int (String.length b)) ]
+    | _ -> headers
+  in
   let request_line = Printf.sprintf "%s %s HTTP/1.1\r\n" (Http.Method.to_string meth) resource in
   let header_lines = headers |> List.map (fun (k, v) -> Printf.sprintf "%s: %s\r\n" k v) |> String.concat "" in
   Eio.Flow.copy_string (request_line ^ header_lines ^ "\r\n" ^ Option.value body ~default:"") flow
 
-let read_response flow =
+let read_response ~meth flow =
   let reader = Eio.Buf_read.of_flow flow ~max_size:(16 * 1024 * 1024) in
   let status_line = Eio.Buf_read.line reader in
   let status =
@@ -72,10 +88,18 @@ let read_response flow =
       (fun (k, v) -> if String.lowercase_ascii k = "content-length" then int_of_string_opt v else None)
       headers
   in
+  (* RFC 7230 3.3.3 rule 1: a response to HEAD, or any 1xx/204/304, never has
+     a body regardless of what the headers say — reading here would either
+     misread the next response on a keep-alive connection or, absent
+     Content-Length, block until the outer request's timeout for a body that
+     was never coming. *)
+  let is_bodyless_by_spec = meth = `HEAD || status = 204 || status = 304 || status < 200 in
   let body =
-    match content_length with
-    | Some n -> Eio.Buf_read.take n reader
-    | None -> ( try Eio.Buf_read.take_all reader with End_of_file -> "")
+    if is_bodyless_by_spec then ""
+    else
+      match content_length with
+      | Some n -> Eio.Buf_read.take n reader
+      | None -> ( try Eio.Buf_read.take_all reader with End_of_file -> "")
   in
   (status, headers, body)
 
@@ -93,7 +117,7 @@ let do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
         (wrap dummy_uri raw :> Eio.Flow.two_way_ty Eio.Std.r))
   in
   write_request flow ~meth ~resource ~headers ~body;
-  read_response flow
+  read_response ~meth flow
 
 (* AWS JSON-protocol services (DynamoDB, etc.) signal throttling as HTTP 400
    with the exception type in the "x-amzn-errortype" response header (e.g.
@@ -184,6 +208,19 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
   let headers = ("host", host) :: ("x-amz-date", amz_date) :: extra_headers in
   let headers =
     match session_token with None -> headers | Some t -> headers @ [ ("x-amz-security-token", t) ]
+  in
+  (* Signed here (not left to write_request's defensive add) because it has
+     to be part of the header set Aws_sigv4.sign covers, matching every
+     POST-with-body case in AWS's own SigV4 conformance suite (e.g.
+     post-x-www-form-urlencoded-parameters signs content-length as part of
+     SignedHeaders). write_request's own Content-Length handling is a no-op
+     here since it's already present, and remains the safety net for the
+     unsigned request path (Aws_credentials's STS/IMDS calls), which has no
+     signature to keep in sync. *)
+  let headers =
+    match body with
+    | Some b -> headers @ [ ("content-length", string_of_int (String.length b)) ]
+    | None -> headers
   in
   let sigv4_request : Aws_sigv4.request =
     { meth = Http.Method.to_string meth; path; query; headers; payload_hash; normalize_path }

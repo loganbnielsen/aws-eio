@@ -157,15 +157,21 @@ RFC 3986 "safe character" set than SigV4 requires — confirmed by hand:
 `Uri.of_string "...%21..." |> Uri.to_string` comes back with the `%21` un-escaped to a
 literal `!`. A request signed with one encoding and sent with another fails AWS's
 signature check for any query value containing `! * ' ( ) : @ $ , +`. `Aws_http`
-instead constructs the `Http.Request.t` directly (`resource` set from
-`Aws_sigv4.canonical_uri`/`canonical_query_string`, the same functions used for
-signing — see `wire_resource`, exposed for testing) and writes/reads the HTTP/1.1
-wire format itself.
+instead hand-writes and hand-parses the HTTP/1.1 wire format itself, with the request
+line's resource built from `Aws_sigv4.canonical_uri`/`canonical_query_string` directly
+(the same functions used for signing — see `wire_resource`, exposed for testing), not
+from any general-purpose URI/HTTP request type.
 
-Response parsing is intentionally minimal: `Content-Length`-delimited bodies (what
-every AWS JSON/XML API call in this package's scope returns), falling back to
-read-until-close otherwise. Chunked `Transfer-Encoding` responses are not handled —
-fine for small API calls, not fine for streaming a large S3 object response.
+Request bodies get an explicit `Content-Length` (RFC 7230 3.3.2/3.3.3 — no
+`Content-Length` and no `Transfer-Encoding` means no body at all as far as a
+spec-compliant server is concerned; `signed_request` also folds it into the signed
+header set, matching AWS's own SigV4 conformance suite's POST-with-body vectors).
+Response parsing is intentionally minimal: no body is read for `HEAD` requests or
+1xx/204/304 responses (RFC 7230 3.3.3 rule 1); otherwise `Content-Length`-delimited
+bodies (what every AWS JSON/XML API call in this package's scope returns), falling
+back to read-until-close, bounded by the request's timeout. Chunked
+`Transfer-Encoding` responses are not handled — fine for small API calls, not fine for
+streaming a large S3 object response.
 
 TLS via a private `Aws_tls` (system CA bundle). Retries network failures and requests
 classified retryable by status or response body (429, any 5xx, and 400 responses
@@ -183,8 +189,14 @@ never retried.
 - `Db`-style naming collision risk: `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`/
   `Aws_tls` are all reasonably specific compound names, lower collision risk than a
   bare single word would be — no `Obs`-style rename needed here.
-- All public APIs return `(_, Aws_error.t) result`; nothing raises across a public
-  boundary.
+- `Aws_http` and `Aws_credentials`'s public functions return `(_, Aws_error.t) result`
+  and never raise — `Aws_http.request_once` catches every exception (including from
+  the raw socket/TLS/parsing code) and converts it to `Network_error`. `Aws_sigv4` is
+  the exception: it's a pure module with no I/O, its functions return plain values
+  (not `result`), and it can raise on malformed input (e.g. `sign`'s `amz_date` must
+  be a well-formed 15-character timestamp) — its only caller, `Aws_http`, always
+  supplies well-formed input, so this hasn't mattered in practice, but a future direct
+  caller of `Aws_sigv4` should not assume result-wrapped safety from it.
 
 ## Out of Scope (v1)
 
