@@ -186,7 +186,8 @@ back to read-until-close, bounded by the request's timeout. Chunked
 `Transfer-Encoding` responses are not handled — fine for small API calls, not fine for
 streaming a large S3 object response.
 
-TLS via a private `Aws_tls` (system CA bundle). Retries network failures and requests
+TLS via the shared `https-eio` package (system CA bundle detection, RNG-seeded
+`Tls.Config.client`). Retries network failures and requests
 classified retryable by status or response body (429, any 5xx, and 400 responses
 carrying a known-retryable `x-amzn-errortype` such as `ThrottlingException` —
 DynamoDB's actual throttling signal is a 400, not a 429/5xx) with exponential backoff
@@ -199,9 +200,10 @@ never retried.
 
 ## Design Notes
 
-- `Db`-style naming collision risk: `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`/
-  `Aws_tls` are all reasonably specific compound names, lower collision risk than a
-  bare single word would be — no `Obs`-style rename needed here.
+- `Db`-style naming collision risk: `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`
+  are all reasonably specific compound names, lower collision risk than a bare single
+  word would be — no `Obs`-style rename needed here. TLS lives in the shared
+  `https-eio` package, not a private module of this package.
 - `Aws_http` and `Aws_credentials`'s public functions return `(_, Aws_error.t) result`
   and never raise, with one deliberate exception: `Eio.Cancel.Cancelled` is always
   re-raised, never converted to an `Error` — a cancellation has to unwind the
