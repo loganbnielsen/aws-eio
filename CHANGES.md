@@ -86,3 +86,16 @@
   `Lazy`'s. New test exercises `Aws_tls.https_for_uri` under real concurrent-domain
   contention (an explicit spin-barrier forces every domain to reach the call at the
   same instant, not just spawned close together) against the fixed code.
+- **Fixed (round 6 of independent review — should-fix, on the round-5 test itself):**
+  the round-5 concurrency test ran *after* an earlier test that already called
+  `Aws_tls.https_for_uri` once, warming `default_https_wrapper_cache` to `Some`
+  before the "concurrent domains" test's race even started — every domain was
+  hitting the lock-free fast path on an already-populated cache, proving nothing
+  about the actual first-use contention the test was named for. An independent
+  reviewer confirmed this concretely by forcing the cache to stay cold going into
+  the domain race and reproducing the original `CamlinternalLazy.Undefined` crash
+  5/5 times against the real code — in an environment where round 5's own fix could
+  not reproduce it at all. The library code (round 5's double-checked-locking fix)
+  was independently re-verified as correct; only the test needed fixing. Fixed by
+  resetting the cache to `None` immediately before the race, making the test
+  self-contained regardless of execution order.

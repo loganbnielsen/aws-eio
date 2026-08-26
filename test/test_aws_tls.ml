@@ -80,9 +80,31 @@ let test_https_handshake_fails_on_cert_not_on_rng () =
    stdlib, not "unspecified." This test exercises the fixed code path under
    real concurrent-domain contention and asserts it stays error-free; it is
    a live exercise of the contract, not proof the old code would have
-   failed here. *)
+   failed here.
+
+   UPDATE — a later review round caught that the paragraph above was itself
+   wrong about what this test exercises: as originally written, this test
+   ran *after* test_https_handshake_fails_on_cert_not_on_rng in the same
+   process, which already calls Aws_tls.https_for_uri and warms
+   default_https_wrapper_cache to Some before this test's domains ever
+   start — so every domain here was just hitting the lock-free Atomic.get
+   fast path on an already-populated cache, proving nothing about the
+   actual first-use race this test is named for. That reviewer confirmed
+   this concretely: forcing the cache to stay cold going into the domain
+   race reproduced the original CamlinternalLazy.Undefined crash 5/5 times
+   against the real Aws_tls.https_for_uri, in an environment where the
+   round that introduced this fix could not reproduce it at all — the
+   hazard is not just documented-but-unconfirmed, it's real and concretely
+   triggerable, just not by this test as first written. Fixed by resetting
+   the cache to None immediately before the race, making this test
+   self-contained regardless of what ran before it or what gets added
+   later. *)
 let test_concurrent_domains_never_see_lazy_undefined () =
   let domain_count = 8 in
+  (* Force a cold cache regardless of test execution order — see the UPDATE
+     note above for why this line is the difference between this test
+     meaning something and being a no-op. *)
+  Atomic.set Aws_tls.default_https_wrapper_cache None;
   (* Spawning domains in sequence (List.init calling Domain.spawn one at a
      time) gives the first-spawned domain a head start in practice, which
      lets it win the lazy uncontested most runs — not a real race. A shared
