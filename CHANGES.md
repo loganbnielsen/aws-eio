@@ -74,3 +74,15 @@
   committed. Also (nit): documented that `signed_request`'s `?port` only affects the
   TCP connection, not the signed/sent `Host` header (correct for real AWS traffic,
   worth knowing for anything else).
+- **Fixed (round 5 of independent review — should-fix):** the round-4 fix used a bare
+  `Stdlib.Lazy.t` to compute `Aws_tls`'s TLS wrapper once. `Lazy`'s own `.mli` states
+  plainly that concurrent `Lazy.force` from multiple OCaml 5 domains has "unspecified"
+  behavior and can raise `CamlinternalLazy.Undefined` — reproduced by an independent
+  reviewer (two domains racing to force the same lazy, 8/8 failures in their
+  environment). Any caller spawning multiple domains (e.g. a parallel S3/DynamoDB
+  worker pool) whose first-ever HTTPS calls landed close together in time could hit
+  this. Fixed with double-checked locking over an `Atomic.t` cache instead of a bare
+  `lazy` — `Atomic`'s cross-domain safety is guaranteed by the stdlib, unlike
+  `Lazy`'s. New test exercises `Aws_tls.https_for_uri` under real concurrent-domain
+  contention (an explicit spin-barrier forces every domain to reach the call at the
+  same instant, not just spawned close together) against the fixed code.

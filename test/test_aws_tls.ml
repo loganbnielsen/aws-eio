@@ -61,10 +61,66 @@ let test_https_handshake_fails_on_cert_not_on_rng () =
         "handshake reached certificate validation, not the unseeded-RNG error" true
         (not (contains_substring ~needle:"not yet initialized" msg)))
 
+(* Regression test for a second blocker: an independent reviewer found that
+   the fix above, when it was a bare `Stdlib.Lazy.t`, was not safe across
+   OCaml 5 domains and reproduced CamlinternalLazy.Undefined from it (8/8
+   runs, two racing domains, in that reviewer's environment). Stdlib.Lazy's
+   own .mli confirms the hazard is real and documented, independent of that
+   reproduction: "Lazy.force is not concurrency-safe... behaviour is
+   unspecified" under concurrent force from multiple domains, and
+   `exception Undefined` is documented as exactly this case. "Unspecified"
+   means a fresh attempt to reproduce the crash is not guaranteed to
+   reproduce it on a different machine/OCaml build/run — and it didn't,
+   here, even with an explicit spin-barrier forcing every domain to hit the
+   call at the same instant (below). That non-reproduction does not
+   contradict the hazard being real; it's exactly what "unspecified
+   behavior" means. Fixed with double-checked locking over an Atomic.t
+   cache instead of a bare lazy (see Aws_tls.default_https_wrapper) — a
+   primitive whose cross-domain safety is actually guaranteed by the
+   stdlib, not "unspecified." This test exercises the fixed code path under
+   real concurrent-domain contention and asserts it stays error-free; it is
+   a live exercise of the contract, not proof the old code would have
+   failed here. *)
+let test_concurrent_domains_never_see_lazy_undefined () =
+  let domain_count = 8 in
+  (* Spawning domains in sequence (List.init calling Domain.spawn one at a
+     time) gives the first-spawned domain a head start in practice, which
+     lets it win the lazy uncontested most runs — not a real race. A shared
+     spin-barrier forces every domain to reach the racy call at the same
+     instant instead. *)
+  let ready_count = Atomic.make 0 in
+  let go = Atomic.make false in
+  let domains =
+    List.init domain_count (fun _ ->
+        Domain.spawn (fun () ->
+            Atomic.incr ready_count;
+            while not (Atomic.get go) do
+              Domain.cpu_relax ()
+            done;
+            let uri = Uri.make ~scheme:"https" ~host:"localhost" () in
+            try
+              ignore (Aws_tls.https_for_uri uri : (Aws_tls.https_wrapper option, Aws_tls.error) result);
+              Ok ()
+            with exn -> Error (Printexc.to_string exn)))
+  in
+  while Atomic.get ready_count < domain_count do
+    Domain.cpu_relax ()
+  done;
+  Atomic.set go true;
+  let results = List.map Domain.join domains in
+  List.iteri
+    (fun i result ->
+      match result with
+      | Ok () -> ()
+      | Error msg -> Alcotest.failf "domain %d: %s" i msg)
+    results
+
 let () =
   Alcotest.run "aws_tls"
     [ ( "https handshake",
         [ Alcotest.test_case "fails on certificate trust, not on an unseeded RNG" `Quick
             test_https_handshake_fails_on_cert_not_on_rng;
+          Alcotest.test_case "concurrent domains never see Lazy.Undefined" `Quick
+            test_concurrent_domains_never_see_lazy_undefined;
         ] );
     ]
