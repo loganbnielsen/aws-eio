@@ -227,19 +227,17 @@ let amz_date_now clock =
     let (y, m, d), ((hh, mm, ss), _) = Ptime.to_date_time t in
     Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ" y m d hh mm ss
 
-(* The setup below (amz_date_now, Aws_sigv4.sign) runs before request_once's
-   own try/with, which only wraps the actual I/O — so without this outer
-   guard, e.g. a clock returning an out-of-range time (amz_date_now's
-   Ptime.of_float_s failing) would raise straight out of signed_request,
-   contradicting this package's stated "never raises across a public
-   boundary" contract for Aws_http specifically (Aws_sigv4, unlike Aws_http,
-   is documented as not making that guarantee — see README). Eio.Cancel.Cancelled
-   is deliberately excluded from this guarantee and always re-raised, never
-   converted to an Error — same rule this author's obs-eio documents for its
-   own backend calls: a cancellation has to unwind the caller's structured
-   concurrency correctly, not get reported as an ordinary result. *)
-let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
-    ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
+(* Everything up to and including Aws_sigv4.sign is pure, offline computation
+   — a failure here (e.g. amz_date_now on a pathological clock, or a future
+   Aws_sigv4 precondition) is categorically not a network problem, so it's
+   reported as Signature_error, not folded into the network try/with below
+   that wraps the actual I/O. Eio.Cancel.Cancelled is deliberately excluded
+   from both and always re-raised, never converted to an Error — same rule
+   this author's obs-eio documents for its own backend calls: a cancellation
+   has to unwind the caller's structured concurrency correctly, not get
+   reported as an ordinary result. *)
+let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token ~region ~service ~normalize_path
+    ~meth ~host ~path ~query ~extra_headers ~payload_hash ~body () =
   try
     let amz_date = amz_date_now clock in
     let payload_hash =
@@ -268,28 +266,41 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
     let authorization =
       Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date sigv4_request
     in
-    let headers = headers @ [ ("Authorization", authorization) ] in
-    let resource = wire_resource ~normalize_path ~path ~query in
-    let https = true in
-    let scheme = "https" in
-    let rec attempt n =
-      match
-        request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth
-          ~resource ~headers ~body
-      with
-      | Ok (status, resp_headers, resp_body)
-        when is_retryable_response ~status ~headers:resp_headers ~body:resp_body
-             && n < Option.value max_retries ~default:3 ->
-        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-        attempt (n + 1)
-      | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
-      | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
-      | Error _ when n < Option.value max_retries ~default:3 ->
-        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-        attempt (n + 1)
-      | Error _ as e -> e
-    in
-    attempt 0
+    Ok (headers @ [ ("Authorization", authorization) ])
   with
   | Eio.Cancel.Cancelled _ as exn -> raise exn
-  | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))
+  | exn -> Error (Aws_error.Signature_error (Printexc.to_string exn))
+
+let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
+    ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
+  match
+    build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token ~region ~service ~normalize_path
+      ~meth ~host ~path ~query ~extra_headers ~payload_hash ~body ()
+  with
+  | Error _ as e -> e
+  | Ok headers -> (
+    try
+      let resource = wire_resource ~normalize_path ~path ~query in
+      let https = true in
+      let scheme = "https" in
+      let rec attempt n =
+        match
+          request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth
+            ~resource ~headers ~body
+        with
+        | Ok (status, resp_headers, resp_body)
+          when is_retryable_response ~status ~headers:resp_headers ~body:resp_body
+               && n < Option.value max_retries ~default:3 ->
+          Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+          attempt (n + 1)
+        | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
+        | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
+        | Error _ when n < Option.value max_retries ~default:3 ->
+          Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+          attempt (n + 1)
+        | Error _ as e -> e
+      in
+      attempt 0
+    with
+    | Eio.Cancel.Cancelled _ as exn -> raise exn
+    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn)))

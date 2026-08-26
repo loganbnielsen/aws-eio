@@ -50,3 +50,9 @@
   which had the same gap already). README corrected: the `Aws_credentials.source`
   code sample now matches the `.mli`'s actual named `static` type instead of an
   inlined record.
+- Fixed (round 3 of independent review — nit): `Aws_error.Signature_error` was
+  declared and documented but never actually constructed anywhere. `signed_request`'s
+  pre-request setup (deriving the timestamp, computing the SigV4 signature) is now
+  split into its own function (`build_signed_headers`) with its own exception
+  boundary, reporting failures there as `Signature_error` — categorically distinct
+  from `Network_error`, which now only covers the actual HTTP I/O.

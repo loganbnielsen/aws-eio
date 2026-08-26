@@ -49,6 +49,13 @@ type t =
 val to_string : t -> string
 ```
 
+`Signature_error` covers failures in `signed_request`'s pre-request setup — deriving
+the current timestamp and computing the SigV4 signature — as distinct from
+`Network_error`, which covers the actual HTTP I/O. In practice this path is very hard
+to exercise (it requires a clock or `Aws_sigv4.sign` input malformed enough to raise,
+which the rest of this package's own code never produces), so it's exercised by
+inspection and type-checking rather than a forced-failure test.
+
 ### `Aws_sigv4`
 
 Pure — no I/O, no Eio dependency. Implements
