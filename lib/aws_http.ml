@@ -109,8 +109,8 @@ let do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
     if not https then (flow :> Eio.Flow.two_way_ty Eio.Std.r)
     else (
       let dummy_uri = Uri.make ~scheme:"https" ~host () in
-      match Aws_tls.https_for_uri dummy_uri with
-      | Error e -> failwith (Aws_tls.error_to_string e)
+      match Https_eio.https_for_uri dummy_uri with
+      | Error e -> failwith (Https_eio.error_to_string e)
       | Ok None -> failwith "Aws_http: https requested but TLS wrapper unavailable"
       | Ok (Some wrap) ->
         let raw = (flow :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r) in
