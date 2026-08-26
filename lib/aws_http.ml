@@ -129,14 +129,36 @@ let retryable_400_error_types =
   [ "throttlingexception"; "throttling"; "provisionedthroughputexceededexception";
     "requestlimitexceeded"; "toomanyrequestsexception"; "requesttimeout"; "idpcommunicationerror" ]
 
-let is_retryable_response ~status ~headers =
+(* AWS's restJson1 protocol spec (smithy.io/2.0/aws/protocols/aws-restjson1-protocol.html)
+   requires clients to accept the exception type from EITHER the
+   x-amzn-errortype header OR a body field named "__type" or "code" — servers
+   are only required to send the header, but older services, proxies, and
+   API Gateway passthrough can omit it. Checking the header alone misses
+   exactly the throttling responses this retry logic exists to catch. *)
+let error_type_from_json_body body =
+  match Yojson.Safe.from_string body with
+  | exception _ -> None
+  | json -> (
+    let field name =
+      match Yojson.Safe.Util.member name json with
+      | `String s -> Some s
+      | _ -> None
+    in
+    match field "__type" with Some _ as v -> v | None -> field "code")
+
+let is_retryable_response ~status ~headers ~body =
   is_retryable status
   ||
   match status with
   | 400 -> (
-    match List.find_opt (fun (k, _) -> String.lowercase_ascii k = "x-amzn-errortype") headers with
+    let error_type =
+      match List.find_opt (fun (k, _) -> String.lowercase_ascii k = "x-amzn-errortype") headers with
+      | Some (_, v) -> Some v
+      | None -> error_type_from_json_body body
+    in
+    match error_type with
     | None -> false
-    | Some (_, v) ->
+    | Some v ->
       let v = String.lowercase_ascii v in
       (* strip an optional "namespace#" prefix some services prepend *)
       let v = match String.index_opt v '#' with Some i -> String.sub v (i + 1) (String.length v - i - 1) | None -> v in
@@ -149,6 +171,11 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
         Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
   with
   | Eio.Time.Timeout -> Error (Aws_error.Network_error "request timed out")
+  (* Never caught-and-converted, same rule obs-eio documents for its own
+     backend calls: a cancellation firing has to unwind the caller's
+     structured concurrency correctly, not get reported as an ordinary
+     Error result. *)
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
   | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))
 
 (* Unsigned request — the escape hatch every credential-bootstrap call needs.
@@ -171,7 +198,8 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
   let resource = Uri.path_and_query u in
   let rec attempt n =
     match request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body with
-    | Ok (status, resp_headers, _) when is_retryable_response ~status ~headers:resp_headers && n < max_retries ->
+    | Ok (status, resp_headers, resp_body)
+      when is_retryable_response ~status ~headers:resp_headers ~body:resp_body && n < max_retries ->
       Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
       attempt (n + 1)
     | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
@@ -199,53 +227,69 @@ let amz_date_now clock =
     let (y, m, d), ((hh, mm, ss), _) = Ptime.to_date_time t in
     Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ" y m d hh mm ss
 
+(* The setup below (amz_date_now, Aws_sigv4.sign) runs before request_once's
+   own try/with, which only wraps the actual I/O — so without this outer
+   guard, e.g. a clock returning an out-of-range time (amz_date_now's
+   Ptime.of_float_s failing) would raise straight out of signed_request,
+   contradicting this package's stated "never raises across a public
+   boundary" contract for Aws_http specifically (Aws_sigv4, unlike Aws_http,
+   is documented as not making that guarantee — see README). Eio.Cancel.Cancelled
+   is deliberately excluded from this guarantee and always re-raised, never
+   converted to an Error — same rule this author's obs-eio documents for its
+   own backend calls: a cancellation has to unwind the caller's structured
+   concurrency correctly, not get reported as an ordinary result. *)
 let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
     ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
-  let amz_date = amz_date_now clock in
-  let payload_hash =
-    match payload_hash with Some h -> h | None -> Aws_sigv4.sha256_hex (Option.value body ~default:"")
-  in
-  let headers = ("host", host) :: ("x-amz-date", amz_date) :: extra_headers in
-  let headers =
-    match session_token with None -> headers | Some t -> headers @ [ ("x-amz-security-token", t) ]
-  in
-  (* Signed here (not left to write_request's defensive add) because it has
-     to be part of the header set Aws_sigv4.sign covers, matching every
-     POST-with-body case in AWS's own SigV4 conformance suite (e.g.
-     post-x-www-form-urlencoded-parameters signs content-length as part of
-     SignedHeaders). write_request's own Content-Length handling is a no-op
-     here since it's already present, and remains the safety net for the
-     unsigned request path (Aws_credentials's STS/IMDS calls), which has no
-     signature to keep in sync. *)
-  let headers =
-    match body with
-    | Some b -> headers @ [ ("content-length", string_of_int (String.length b)) ]
-    | None -> headers
-  in
-  let sigv4_request : Aws_sigv4.request =
-    { meth = Http.Method.to_string meth; path; query; headers; payload_hash; normalize_path }
-  in
-  let authorization =
-    Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date sigv4_request
-  in
-  let headers = headers @ [ ("Authorization", authorization) ] in
-  let resource = wire_resource ~normalize_path ~path ~query in
-  let https = true in
-  let scheme = "https" in
-  let rec attempt n =
-    match
-      request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth
-        ~resource ~headers ~body
-    with
-    | Ok (status, resp_headers, _)
-      when is_retryable_response ~status ~headers:resp_headers && n < Option.value max_retries ~default:3 ->
-      Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-      attempt (n + 1)
-    | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
-    | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
-    | Error _ when n < Option.value max_retries ~default:3 ->
-      Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-      attempt (n + 1)
-    | Error _ as e -> e
-  in
-  attempt 0
+  try
+    let amz_date = amz_date_now clock in
+    let payload_hash =
+      match payload_hash with Some h -> h | None -> Aws_sigv4.sha256_hex (Option.value body ~default:"")
+    in
+    let headers = ("host", host) :: ("x-amz-date", amz_date) :: extra_headers in
+    let headers =
+      match session_token with None -> headers | Some t -> headers @ [ ("x-amz-security-token", t) ]
+    in
+    (* Signed here (not left to write_request's defensive add) because it has
+       to be part of the header set Aws_sigv4.sign covers, matching every
+       POST-with-body case in AWS's own SigV4 conformance suite (e.g.
+       post-x-www-form-urlencoded-parameters signs content-length as part of
+       SignedHeaders). write_request's own Content-Length handling is a no-op
+       here since it's already present, and remains the safety net for the
+       unsigned request path (Aws_credentials's STS/IMDS calls), which has no
+       signature to keep in sync. *)
+    let headers =
+      match body with
+      | Some b -> headers @ [ ("content-length", string_of_int (String.length b)) ]
+      | None -> headers
+    in
+    let sigv4_request : Aws_sigv4.request =
+      { meth = Http.Method.to_string meth; path; query; headers; payload_hash; normalize_path }
+    in
+    let authorization =
+      Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date sigv4_request
+    in
+    let headers = headers @ [ ("Authorization", authorization) ] in
+    let resource = wire_resource ~normalize_path ~path ~query in
+    let https = true in
+    let scheme = "https" in
+    let rec attempt n =
+      match
+        request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth
+          ~resource ~headers ~body
+      with
+      | Ok (status, resp_headers, resp_body)
+        when is_retryable_response ~status ~headers:resp_headers ~body:resp_body
+             && n < Option.value max_retries ~default:3 ->
+        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+        attempt (n + 1)
+      | Ok (status, _, resp_body) when status >= 200 && status < 300 -> Ok (status, resp_body)
+      | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
+      | Error _ when n < Option.value max_retries ~default:3 ->
+        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+        attempt (n + 1)
+      | Error _ as e -> e
+    in
+    attempt 0
+  with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))

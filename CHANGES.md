@@ -35,3 +35,18 @@
   `cohttp-eio` removed from the library's runtime dependencies (it was never
   actually used outside a comment — moved to test-only, where the mock server in
   `test_aws_http.ml` still needs it).
+- Fixed (round 2 of independent review): retry classification only checked the
+  `x-amzn-errortype` response header for a throttling exception type; AWS's
+  restJson1 protocol spec requires clients to also accept it from a body field
+  named `__type` or `code`, since only the header is required on the server side
+  — a throttling response from a service/proxy that omits the header silently
+  wasn't retried. Now falls back to the response body. `signed_request` had a
+  window before `request_once`'s own exception handling (e.g. `amz_date_now`
+  failing on a pathological clock) where an exception would raise straight out of
+  a function documented as never raising — wrapped in the same catch-and-convert
+  pattern, with `Eio.Cancel.Cancelled` deliberately excluded (always re-raised,
+  never swallowed into an `Error`, matching the rule this author's `obs-eio`
+  documents for its own backend calls; the same fix applied to `request_once`,
+  which had the same gap already). README corrected: the `Aws_credentials.source`
+  code sample now matches the `.mli`'s actual named `static` type instead of an
+  inlined record.

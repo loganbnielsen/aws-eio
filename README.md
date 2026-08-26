@@ -93,8 +93,10 @@ default — every caller states which behavior their service needs. Verified aga
 ### `Aws_credentials`
 
 ```ocaml
+type static = { access_key_id : string; secret_access_key : string; session_token : string option }
+
 type source =
-  | Static of { access_key_id : string; secret_access_key : string; session_token : string option }
+  | Static of static
   | Web_identity of { role_arn : string; token_file : string }   (* EKS IRSA *)
   | Container of { relative_uri : string }                        (* ECS/Fargate task role *)
   | Imdsv2                                                        (* EC2 *)
@@ -190,11 +192,16 @@ never retried.
   `Aws_tls` are all reasonably specific compound names, lower collision risk than a
   bare single word would be — no `Obs`-style rename needed here.
 - `Aws_http` and `Aws_credentials`'s public functions return `(_, Aws_error.t) result`
-  and never raise — `Aws_http.request_once` catches every exception (including from
-  the raw socket/TLS/parsing code) and converts it to `Network_error`. `Aws_sigv4` is
-  the exception: it's a pure module with no I/O, its functions return plain values
-  (not `result`), and it can raise on malformed input (e.g. `sign`'s `amz_date` must
-  be a well-formed 15-character timestamp) — its only caller, `Aws_http`, always
+  and never raise, with one deliberate exception: `Eio.Cancel.Cancelled` is always
+  re-raised, never converted to an `Error` — a cancellation has to unwind the
+  caller's structured concurrency correctly, the same rule this author's `obs-eio`
+  documents for its own backend calls. Every other exception (including from the raw
+  socket/TLS/parsing code, and from `signed_request`'s own pre-request setup, e.g. a
+  clock returning an out-of-range time) is caught and converted to `Network_error`.
+  `Aws_sigv4` is the exception to the "returns result" half of this: it's a pure
+  module with no I/O, its functions return plain values (not `result`), and it can
+  raise on malformed input (e.g. `sign`'s `amz_date` must be a well-formed
+  15-character timestamp) — its only caller, `Aws_http`, always
   supplies well-formed input, so this hasn't mattered in practice, but a future direct
   caller of `Aws_sigv4` should not assume result-wrapped safety from it.
 
