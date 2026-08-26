@@ -13,3 +13,8 @@
  (name test_aws_http)
  (modules test_aws_http)
  (libraries aws_eio alcotest eio_main cohttp-eio))
+
+(test
+ (name test_aws_live)
+ (modules test_aws_live)
+ (libraries aws_eio alcotest eio_main))
