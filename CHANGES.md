@@ -108,3 +108,20 @@
   replaces the hand-rolled, Linux/macOS-only CA-bundle path list with the maintained
   `ca-certs` package. The TLS regression tests (real handshake, concurrent-domain
   cache race) moved to `https-eio`'s own test suite.
+- **Proven live (post-tag):** a real `STS GetCallerIdentity` call, signed by this
+  package, was accepted by real AWS (`test/test_aws_live.ml`, gated by
+  `AWS_EIO_LIVE=1`). First confirmation this package is correct against the actual
+  service, not just internally consistent against AWS's conformance-suite vectors
+  and local mock servers.
+- **API change (post-tag, found while designing `s3-eio`): `request` and
+  `signed_request` now return response headers on success —
+  `(int * (string * string) list * string, Aws_error.t) result`, not
+  `(int * string, Aws_error.t) result`.** `read_response` always parsed headers
+  internally (used for retry classification) but discarded them before returning
+  to the caller; a client needing `Content-Length`/`ETag`/`Last-Modified` from an
+  HTTP `HEAD` response — the entire point of `HEAD` — had no way to get them.
+  Error responses are unchanged (`Http_error of int * string`, no headers) to keep
+  this a narrow, low-risk addition rather than touching the signing/retry logic
+  at all. Every existing caller (`Aws_credentials`'s STS/IMDS/container-credential
+  calls, this package's own tests) updated to the 3-tuple; a new regression test
+  (`test_response_headers_are_returned`) pins the contract down.

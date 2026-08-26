@@ -102,7 +102,7 @@ let resolve_web_identity ~net ~clock ~region ~role_arn ~token_file =
   let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
   match Aws_http.request ~net ~clock ~meth:`POST ~uri ~headers ~body () with
   | Error e -> Error e
-  | Ok (_, resp_body) -> (
+  | Ok (_, _, resp_body) -> (
     match
       ( extract_tag "AccessKeyId" resp_body,
         extract_tag "SecretAccessKey" resp_body,
@@ -141,7 +141,7 @@ let resolve_imdsv2 ~net ~clock =
       ()
   with
   | Error e -> Error e
-  | Ok (_, token_resp) -> (
+  | Ok (_, _, token_resp) -> (
     let token_headers = [ ("X-aws-ec2-metadata-token", String.trim token_resp) ] in
     match
       Aws_http.request ~net ~clock ~timeout:imdsv2_timeout ~meth:`GET
@@ -149,7 +149,7 @@ let resolve_imdsv2 ~net ~clock =
         ~headers:token_headers ()
     with
     | Error e -> Error e
-    | Ok (_, role_name_resp) -> (
+    | Ok (_, _, role_name_resp) -> (
       let role_name = String.trim role_name_resp in
       match
         Aws_http.request ~net ~clock ~timeout:imdsv2_timeout ~meth:`GET
@@ -157,13 +157,13 @@ let resolve_imdsv2 ~net ~clock =
           ~headers:token_headers ()
       with
       | Error e -> Error e
-      | Ok (_, creds_json) -> resolved_of_json_credentials creds_json))
+      | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json))
 
 let resolve_container ~net ~clock ~relative_uri =
   (* 169.254.170.2 is the fixed ECS/Fargate task metadata endpoint. *)
   match Aws_http.request ~net ~clock ~meth:`GET ~uri:("http://169.254.170.2" ^ relative_uri) ~headers:[] () with
   | Error e -> Error e
-  | Ok (_, creds_json) -> resolved_of_json_credentials creds_json
+  | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json
 
 let resolve_env_chain ~net ~clock ~region =
   match (Sys.getenv_opt "AWS_ACCESS_KEY_ID", Sys.getenv_opt "AWS_SECRET_ACCESS_KEY") with
