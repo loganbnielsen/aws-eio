@@ -13,9 +13,13 @@ extracted packages (`kafka-eio`, `obs-eio`, `pg-eio`), which were pulled out aft
 being used by real callers for a while.
 
 **Caution:** this package has been validated against AWS's own published SigV4
-conformance suite and realistic sample credential-provider responses, but it has not
-yet been exercised against a live AWS endpoint (no S3/DynamoDB/STS/IMDS call has
-actually been made from an environment with real AWS access). Spec-conformant and
+conformance suite, realistic sample credential-provider responses, and (as of the
+`CHANGES.md`-documented RNG fix) a real local TLS handshake — but it has still not
+been exercised against a live AWS endpoint (no S3/DynamoDB/STS/IMDS call has actually
+been made from an environment with real AWS access). That gap is not hypothetical: an
+earlier 0.1.0 build of this package could not perform any real HTTPS call at all (the
+TLS RNG was never seeded — see `CHANGES.md`), and every local mock-server test in this
+repo passed the whole time, because none of them touch real TLS. Spec-conformant and
 internally consistent is not the same claim as "confirmed working against the real
 thing" — treat 0.1.0 accordingly until someone reports a real end-to-end call working.
 

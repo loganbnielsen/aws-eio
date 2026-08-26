@@ -60,7 +60,25 @@ let make_https_wrapper ?ca_paths () : (https_wrapper, error) result =
           in
           Tls_eio.client_of_flow ?host tls_config raw)
 
-let default_https_wrapper = lazy (make_https_wrapper ())
+(* tls-eio's handshake needs Mirage_crypto_rng.default_generator seeded before
+   it generates any key/nonce material — without this, every TLS handshake
+   raises "The default generator is not yet initialized" at the point of
+   first use. Nothing in this package (or its opam dependency graph) did
+   this; found by an independent reviewer's first real HTTPS call, since
+   every prior test in this repo deliberately used plain-HTTP local mock
+   servers. One-shot, idempotent (Lazy.force only ever runs the RHS once),
+   tied to the same lazy that builds the TLS wrapper so pure-signing use of
+   this package (which never touches Aws_tls) doesn't pay for it. Using the
+   synchronous getentropy-based seed (Mirage_crypto_rng_unix.use_default),
+   not the Eio-native continuously-reseeding mirage-crypto-rng-eio, to avoid
+   requiring env/sw here — a single blocking syscall at first-TLS-use is a
+   fine trade for keeping this module's interface as small as it is now
+   (Aws_tls.authenticator already makes one blocking Unix call,
+   Unix.gettimeofday, for the same reason). *)
+let default_https_wrapper =
+  lazy (
+    Mirage_crypto_rng_unix.use_default ();
+    make_https_wrapper ())
 
 let https_for_uri uri =
   match Uri.scheme uri with

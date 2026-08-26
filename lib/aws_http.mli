@@ -49,6 +49,13 @@ val signed_request
   -> meth:Http.Method.t
   -> host:string
   -> ?port:int
+      (** Used only to open the TCP connection — the signed and sent [Host]
+          header is [host] alone, with no port suffix, matching how real AWS
+          endpoints expect it (port 443 is implicit and never appears in the
+          header). A caller pointing this at a non-AWS test server on a
+          non-standard port gets a [Host] header that does not name the
+          actual destination — harmless for real AWS traffic, worth knowing
+          for anything else. *)
   -> path:string
   -> ?query:(string * string) list
   -> ?extra_headers:(string * string) list

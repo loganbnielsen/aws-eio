@@ -13,3 +13,9 @@
  (name test_aws_http)
  (modules test_aws_http)
  (libraries aws_eio alcotest eio_main cohttp-eio))
+
+(test
+ (name test_aws_tls)
+ (modules test_aws_tls)
+ (libraries aws_eio alcotest eio_main tls-eio x509)
+ (deps (source_tree tls_fixtures)))

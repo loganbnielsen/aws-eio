@@ -56,3 +56,21 @@
   split into its own function (`build_signed_headers`) with its own exception
   boundary, reporting failures there as `Signature_error` — categorically distinct
   from `Network_error`, which now only covers the actual HTTP I/O.
+- **Fixed (round 4 of independent review — blocker):** every real HTTPS call this
+  package makes (`signed_request`, and `Aws_credentials.resolve_web_identity`'s EKS
+  IRSA bootstrap) failed at runtime with "The default generator is not yet
+  initialized" — `tls-eio`'s handshake needs `Mirage_crypto_rng.default_generator`
+  seeded, and nothing in this package (or its dependency graph) ever did that. Every
+  prior test used plain HTTP against local mock servers, so this had zero coverage
+  through three review rounds; found by the first test that actually attempted a real
+  TLS handshake. Fixed in `Aws_tls`: the same `lazy` that builds the client TLS
+  wrapper now also calls `Mirage_crypto_rng_unix.use_default ()` first (one-shot,
+  idempotent, and only paid by callers who actually touch HTTPS — pure-SigV4-signing
+  use of this package never triggers it). New test (`test_aws_tls.ml`) performs a
+  real local TLS handshake against a self-signed cert (checked in under
+  `test/tls_fixtures/`, generated with `openssl`, not trusted by the system CA
+  bundle) and asserts the failure is a certificate-trust failure, not the
+  RNG-not-initialized error — verified to actually fail without the fix before being
+  committed. Also (nit): documented that `signed_request`'s `?port` only affects the
+  TCP connection, not the signed/sent `Host` header (correct for real AWS traffic,
+  worth knowing for anything else).
