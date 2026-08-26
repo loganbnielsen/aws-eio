@@ -1,0 +1,15 @@
+(test
+ (name test_aws_sigv4)
+ (modules test_aws_sigv4)
+ (libraries aws_eio alcotest yojson)
+ (deps (source_tree vectors)))
+
+(test
+ (name test_aws_credentials)
+ (modules test_aws_credentials)
+ (libraries aws_eio alcotest eio_main))
+
+(test
+ (name test_aws_http)
+ (modules test_aws_http)
+ (libraries aws_eio alcotest eio_main cohttp-eio))
