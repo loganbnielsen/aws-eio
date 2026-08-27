@@ -244,7 +244,9 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
     let payload_hash =
       match payload_hash with Some h -> h | None -> Aws_sigv4.sha256_hex (Option.value body ~default:"")
     in
-    let headers = ("host", host) :: ("x-amz-date", amz_date) :: extra_headers in
+    let headers =
+      ("host", host) :: ("x-amz-date", amz_date) :: ("x-amz-content-sha256", payload_hash) :: extra_headers
+    in
     let headers =
       match session_token with None -> headers | Some t -> headers @ [ ("x-amz-security-token", t) ]
     in
