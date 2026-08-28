@@ -130,9 +130,9 @@ let canonical_headers headers =
 let canonical_request req =
   let uri = canonical_uri ~normalize_path:req.normalize_path req.path in
   let canonical_query = canonical_query_string req.query in
-  let canonical_hdrs, signed_headers = canonical_headers req.headers in
+  let canonical_headers_, signed_headers = canonical_headers req.headers in
   String.concat "\n"
-    [ req.meth; uri; canonical_query; canonical_hdrs;
+    [ req.meth; uri; canonical_query; canonical_headers_;
       String.concat ";" signed_headers; req.payload_hash ]
 
 let hashed_canonical_request req = sha256_hex (canonical_request req)
