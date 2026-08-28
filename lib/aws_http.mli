@@ -6,8 +6,7 @@
     request: that client derives the request line from [Uri.path_and_query],
     which round-trips through a more permissive character-escaping rule than
     SigV4 requires and would send different bytes than {!signed_request}
-    signed — see the comment at the top of [aws_http.ml] for how this was
-    found and verified. *)
+    signed — see [aws_http.ml]. *)
 
 val request
   :  ?max_retries:int  (** default 3 *)
@@ -20,21 +19,14 @@ val request
   -> ?body:string
   -> unit
   -> (int * (string * string) list * string, Aws_error.t) result
-(** Unsigned request. This is the escape hatch every credential-bootstrap
-    call needs (STS's AssumeRoleWithWebIdentity, the IMDSv2 token/metadata
-    endpoints) — those calls happen *before* any credentials exist to sign
-    with, so they must never be routed through {!signed_request}. [uri] is
-    only ever a fixed literal URL at every call site in this package, so the
-    [Uri.path_and_query] re-encoding concern above does not apply here.
-    Retries both network failures and requests classified retryable by
-    {!Aws_error} status/body inspection (429, 5xx, and 400 responses that
-    carry a known-retryable [x-amzn-errortype] such as [ThrottlingException]
-    — see [is_retryable_response] in [aws_http.ml]); a non-2xx, non-retryable
-    response is returned as [Error (Http_error (status, body))] rather than
-    retried (response headers are only returned on success — the error case
-    carries just status and body, unchanged, to keep this a narrow addition).
-    Pass a short [?timeout] for SSRF-adjacent endpoints like IMDS — see
-    aws-audit.md. *)
+(** Unsigned escape hatch for credential-bootstrap calls (STS
+    AssumeRoleWithWebIdentity, IMDSv2) that happen before any credentials
+    exist to sign with. [uri] is always a fixed literal URL at every call
+    site, so re-encoding is not a concern here. Retries network failures and
+    responses classified retryable by {!Aws_error} status/body inspection
+    (429, 5xx, and 400s with a known-retryable [x-amzn-errortype]); a
+    non-2xx, non-retryable response returns [Error (Http_error (status,
+    body))]. Pass a short [?timeout] for SSRF-adjacent endpoints like IMDS. *)
 
 val signed_request
   :  ?max_retries:int
@@ -52,12 +44,9 @@ val signed_request
   -> host:string
   -> ?port:int
       (** Used only to open the TCP connection — the signed and sent [Host]
-          header is [host] alone, with no port suffix, matching how real AWS
-          endpoints expect it (port 443 is implicit and never appears in the
-          header). A caller pointing this at a non-AWS test server on a
-          non-standard port gets a [Host] header that does not name the
-          actual destination — harmless for real AWS traffic, worth knowing
-          for anything else. *)
+          header is [host] alone, with no port suffix. A non-AWS test server
+          on a non-standard port thus gets a [Host] header that doesn't name
+          the real destination. *)
   -> path:string
   -> ?query:(string * string) list
   -> ?extra_headers:(string * string) list

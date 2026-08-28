@@ -45,15 +45,11 @@ let with_echo_server env f =
       `Stop_daemon);
   Fun.protect ~finally:(fun () -> Eio.Promise.resolve stop_r ()) (fun () -> f ~port)
 
-(* A raw fake server (not cohttp-eio's, which wouldn't let us send a
-   deliberately-misleading response) that accepts one connection, reads and
-   discards the request, then sends exactly [raw_response] verbatim and
-   closes. Used to construct a response that claims a body via
-   Content-Length but never actually sends one — the real, legal shape of a
-   HEAD response (Content-Length mirrors what GET's body length would be,
-   but no body bytes follow) or a 204. If read_response didn't special-case
-   these per RFC 7230 3.3.3 rule 1, it would hang reading bytes that will
-   never arrive, until the caller's request timeout. *)
+(* A raw fake server (not cohttp-eio's, which won't send a
+   deliberately-misleading response): sends exactly [raw_response] verbatim,
+   e.g. a HEAD/204 response whose Content-Length claims a body that never
+   follows — the legal shape read_response must special-case per RFC 7230
+   3.3.3 rule 1, or it would hang until the caller's timeout. *)
 let with_raw_server env ~raw_response f =
   Eio.Switch.run @@ fun sw ->
   let socket = Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
@@ -105,17 +101,10 @@ let test_204_response_never_reads_a_body () =
     Alcotest.(check int) "status" 204 status;
     Alcotest.(check string) "204 response body is empty despite Content-Length" "" body
 
-(* Regression test for a blocker an independent reviewer caught with a raw
-   TCP capture: write_request never sent Content-Length, so a spec-compliant
-   server (RFC 7230 3.3.2/3.3.3) treats a request with no Content-Length and
-   no Transfer-Encoding as having NO body at all — the bytes still went out
-   on the wire, just unattributed to the request. This broke every
-   body-carrying call this package makes, including Aws_credentials's own
-   EKS IRSA bootstrap (AssumeRoleWithWebIdentity). The server here echoes
-   back whatever body it actually received as a request body (via cohttp
-   -eio's own request parsing, which strictly follows Content-Length/
-   Transfer-Encoding framing) — if this test passes, a real HTTP/1.1 server
-   really does see the body. *)
+(* Without Content-Length, a spec-compliant server (RFC 7230 3.3.2/3.3.3)
+   treats a request as having no body at all. Echoes back the body via
+   cohttp-eio's own Content-Length-framed parsing, so a pass means a real
+   HTTP/1.1 server actually sees it. *)
 let test_request_body_is_received_by_server () =
   Eio_main.run @@ fun env ->
   with_echo_server env @@ fun ~port ->
@@ -149,13 +138,9 @@ let test_retries_429_once () =
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
 
-(* Regression test for the bug an independent reviewer caught: signed_request
-   used to build the wire URI via Uri.make/Uri.to_string, a *different*
-   encoder than Aws_sigv4 signs with. RFC 3986 permits `!*'();:@$,+` unescaped
-   in a URI; SigV4's UriEncode() requires all of them percent-encoded — a
-   value containing them would be signed one way and sent another, breaking
-   AWS's signature check. wire_resource now reuses Aws_sigv4's own encoders
-   directly, so this can no longer drift. *)
+(* RFC 3986 permits `!*'();:@$,+` unescaped in a URI; SigV4's UriEncode()
+   requires them all percent-encoded, so a Uri-based encoder would sign and
+   send different bytes. *)
 let test_wire_resource_matches_strict_sigv4_encoding () =
   let resource =
     Aws_http.wire_resource ~normalize_path:true ~path:"/"
@@ -179,15 +164,9 @@ let test_wire_resource_s3_unnormalized () =
   let resource = Aws_http.wire_resource ~normalize_path:false ~path:"//example//" ~query:[] in
   Alcotest.(check string) "S3 unnormalized path preserved" "//example//" resource
 
-(* Regression test for a should-fix an independent reviewer caught: AWS's
-   restJson1 protocol spec requires clients to accept a service's throttling
-   exception type from EITHER the x-amzn-errortype header OR a body field
-   named "__type"/"code" — servers are only required to send the header, so
-   a client that checks only the header misses throttling responses from
-   services/proxies that only put it in the body. This server sends a 400
-   with the exception type ONLY in the JSON body, no x-amzn-errortype header
-   at all — if retry classification only checked the header, this would
-   never be retried. *)
+(* Sends a 400 with the throttling exception type only in the JSON body, no
+   x-amzn-errortype header — retry classification must fall back to the body
+   field or this would never be retried. *)
 let with_body_only_throttle_server env f =
   Eio.Switch.run @@ fun sw ->
   let hits = ref 0 in
@@ -227,13 +206,8 @@ let test_retries_body_only_throttling_error () =
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
 
-(* Regression test for a gap found while designing s3-eio: read_response has
-   always parsed response headers internally (used for retry classification),
-   but request/signed_request discarded them before returning to the caller
-   — a client that needs Content-Length/ETag/Last-Modified from a HEAD
-   response (the entire point of HTTP HEAD) had no way to get them. Fixed by
-   threading resp_headers through to the success case; this test pins that
-   contract down so it can't silently regress back to (status, body). *)
+(* Pins the contract that response headers reach the caller (e.g.
+   Content-Length/ETag from a HEAD response), not just status and body. *)
 let test_response_headers_are_returned () =
   Eio_main.run @@ fun env ->
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nETag: \"abc123\"\r\n\r\n" in

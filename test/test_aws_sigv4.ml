@@ -102,30 +102,24 @@ let run_case case () =
   let access_key_id = creds |> member "access_key_id" |> to_string in
   let secret_access_key = creds |> member "secret_access_key" |> to_string in
   let token = creds |> member "token" |> to_string_option in
-  (* Some services want X-Amz-Security-Token signed (part of the canonical
-     request); others accept it added to the request only after signing.
-     context.json's "omit_session_token" (absent = false = signed) selects
-     which behavior this case exercises — see post-sts-header-{before,after}. *)
+  (* Some services sign X-Amz-Security-Token as part of the canonical
+     request; others add it only after signing. context.json's
+     "omit_session_token" (default false = signed) selects which. *)
   let omit_session_token =
     match ctx |> member "omit_session_token" with `Bool b -> b | _ -> false
   in
   let region = ctx |> member "region" |> to_string in
   let service = ctx |> member "service" |> to_string in
   let normalize_path = ctx |> member "normalize" |> to_bool in
-  (* Whether the caller exposes the payload hash as an explicit
-     X-Amz-Content-Sha256 header (some services, e.g. S3, require it) as
-     opposed to leaving it only as the canonical request's trailing hashed
-     -payload line (which is always present regardless — see payload_hash
-     below). Verified against post-x-www-form-urlencoded (sign_body: true,
-     adds the header) vs. post-vanilla (sign_body: false, does not). *)
+  (* Whether the payload hash is also exposed as an explicit
+     X-Amz-Content-Sha256 header (required by some services, e.g. S3) versus
+     only as the canonical request's trailing hashed-payload line. *)
   let sign_body = ctx |> member "sign_body" |> to_bool in
   let amz_date = ctx |> member "timestamp" |> to_string |> amz_date_of_iso8601 in
   let meth, path, query, headers, body = parse_request (read_file (Filename.concat dir "request.txt")) in
   let payload_hash = Aws_sigv4.sha256_hex body in
-  (* request.txt carries only what the client already knows (Host, any custom
-     headers); X-Amz-Date and X-Amz-Security-Token are what the *signing
-     process itself* adds from the resolved credentials/clock, so the test
-     harness derives them from context.json rather than the request file. *)
+  (* X-Amz-Date and X-Amz-Security-Token are added by signing itself, not
+     present in request.txt, so they're derived from context.json instead. *)
   let headers = headers @ [ ("X-Amz-Date", amz_date) ] in
   let headers =
     match token with

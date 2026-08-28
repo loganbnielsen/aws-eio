@@ -5,14 +5,11 @@ type request = {
   headers : (string * string) list;
   payload_hash : string;
   normalize_path : bool;
-      (** Most services (e.g. DynamoDB) expect the canonical URI to be RFC-3986
-          normalized: dot segments removed, consecutive slashes collapsed. S3
-          is the documented exception — object keys may legitimately contain
-          "//" or ".." as literal characters, so S3 requests must set this to
-          [false] to sign the literal path unchanged (still percent-encoded
-          byte-for-byte, just not dot/slash-collapsed). No default: every
-          caller states which behavior their service needs, the same way
-          every Kafka config states its security posture explicitly. *)
+      (** Most services expect the canonical URI RFC-3986 normalized (dot
+          segments removed, consecutive slashes collapsed). S3 is the
+          documented exception — object keys may legitimately contain "//" or
+          ".." literally, so S3 requests set this [false] to sign the literal
+          path (still percent-encoded, just not collapsed). No default. *)
 }
 
 let sha256_hex s = Digestif.SHA256.(to_hex (digest_string s))
@@ -36,19 +33,13 @@ let uri_encode s =
 
 (* S3's documented exception: no dot-segment removal, no slash collapsing —
    an object key may legitimately contain "//" or ".." as literal bytes. Each
-   '/'-delimited segment (including empty ones, which round-trip as "") is
-   still percent-encoded byte-for-byte. Verified against aws-c-auth's
-   `tests/aws-signing-test-suite/v4/*-unnormalized` fixtures, e.g.
-   get-slashes-unnormalized: "//example//" (raw) -> "//example//" (canonical);
-   get-space-unnormalized: "/example space/" -> "/example%20space/". *)
+   '/'-delimited segment is still percent-encoded byte-for-byte. Verified
+   against aws-c-auth's `*-unnormalized` conformance fixtures. *)
 let unnormalized_path raw_path =
   raw_path |> String.split_on_char '/' |> List.map uri_encode |> String.concat "/"
 
 (* RFC 3986-style remove_dot_segments, plus AWS's additional collapsing of
-   consecutive slashes. Verified against aws-c-auth's
-   `tests/aws-signing-test-suite/v4/*-normalized` fixtures, e.g.
-   get-slashes-normalized: "//example//" -> "/example/";
-   get-slash-normalized: "//" -> "/". *)
+   consecutive slashes. Verified against aws-c-auth's `*-normalized` fixtures. *)
 let normalized_path raw_path =
   let ends_with_slash =
     String.length raw_path > 1 && raw_path.[String.length raw_path - 1] = '/'
@@ -73,12 +64,8 @@ let canonical_uri ~normalize_path raw_path =
   if normalize_path then normalized_path raw_path else unnormalized_path raw_path
 
 (* Sort by (encoded key, encoded value) — a plain [compare] on the tuple is
-   already lexicographic on the first component then the second, which is
-   exactly AWS's stated rule ("sort the parameters... alphabetically by key
-   name... after encoding"). Verified against get-vanilla-query-order-key:
-   raw "Param1=value2&Param1=Value1" canonicalizes to
-   "Param1=Value1&Param1=value2" (uppercase 'V' < lowercase 'v' in ordinal
-   comparison, so same-key entries are broken by value). *)
+   already lexicographic key-then-value, matching AWS's stated rule ("sort
+   the parameters alphabetically by key name after encoding"). *)
 let canonical_query_string query =
   query
   |> List.map (fun (k, v) -> (uri_encode k, uri_encode v))
@@ -104,10 +91,8 @@ let trim_and_collapse_spaces s =
   Buffer.contents buf
 
 (* Returns (canonical headers block, sorted lowercase signed-header names).
-   Duplicate header names are folded into one comma-joined value, values
-   joined in original request order (verified against the test suite's
-   get-header-key-duplicate / get-header-value-order cases — neither
-   sorts nor dedupes the joined values, only the header names are sorted). *)
+   Duplicate header names are folded into one comma-joined value, values kept
+   in original request order (only the header names are sorted). *)
 let canonical_headers headers =
   let lowered =
     List.map (fun (k, v) -> (String.lowercase_ascii k, trim_and_collapse_spaces v)) headers

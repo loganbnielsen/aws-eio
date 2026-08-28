@@ -12,8 +12,7 @@ type source =
   | Static of static
   | Web_identity of { role_arn : string; token_file : string }
       (** EKS IRSA (AssumeRoleWithWebIdentity). Sun's actual production
-          deploy target — see [platform/infra/aws/main.tf]'s existing IRSA
-          usage for cert-manager. *)
+          credential source. *)
   | Container of { relative_uri : string }  (** ECS/Fargate task role. *)
   | Imdsv2  (** EC2 instance profile. *)
   | Env_chain
