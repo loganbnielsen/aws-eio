@@ -7,7 +7,7 @@
     see [test/test_aws_sigv4.ml]. Header-based signing only (v1 scope); query
     -string-based presigned-URL signing is not implemented. *)
 
-type request = {
+type signing_request = {
   meth : string;
   path : string;
       (** Raw, unencoded absolute path, e.g. ["/example space/"]. Percent-encoded
@@ -33,8 +33,8 @@ type request = {
 
 val sha256_hex : string -> string
 
-val canonical_request : request -> string
-val hashed_canonical_request : request -> string
+val canonical_request : signing_request -> string
+val hashed_canonical_request : signing_request -> string
 
 val canonical_uri : normalize_path:bool -> string -> string
 (** The exact path bytes used both for signing and for the wire request line.
@@ -50,7 +50,7 @@ val string_to_sign
   :  algorithm:string
   -> amz_date:string
   -> credential_scope:string
-  -> request:request
+  -> request:signing_request
   -> string
 
 val signing_key : secret_access_key:string -> date:string -> region:string -> service:string -> string
@@ -72,7 +72,7 @@ val sign
   -> region:string
   -> service:string
   -> amz_date:string
-  -> request
+  -> signing_request
   -> string
 (** End-to-end: derives the signing key and returns the value to send as the
     [Authorization] header. [amz_date] must be an ISO 8601 basic-format

@@ -1,4 +1,4 @@
-type request = {
+type signing_request = {
   meth : string;
   path : string;
   query : (string * string) list;

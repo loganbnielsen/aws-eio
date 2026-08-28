@@ -39,7 +39,7 @@ val signed_request
   -> region:string
   -> service:string
   -> normalize_path:bool
-      (** [true] for most services, [false] for S3 — see {!Aws_sigv4.request.normalize_path}. *)
+      (** [true] for most services, [false] for S3 — see {!Aws_sigv4.signing_request.normalize_path}. *)
   -> meth:Http.Method.t
   -> host:string
   -> ?port:int
