@@ -125,3 +125,11 @@
   at all. Every existing caller (`Aws_credentials`'s STS/IMDS/container-credential
   calls, this package's own tests) updated to the 3-tuple; a new regression test
   (`test_response_headers_are_returned`) pins the contract down.
+- **API change (post-tag): `Aws_sigv4.request` (the type) renamed to
+  `Aws_sigv4.signing_request`** — it shared a bare name with `Aws_http.request`
+  (the function) in a sibling module of the same package, an ambiguity in the
+  same class the local `sts` variable → `to_sign` rename already fixed elsewhere
+  in `Aws_sigv4`. No external package referenced `Aws_sigv4` directly at the time
+  of this rename. Also renamed internally: `canonical_hdrs` → `canonical_headers_`,
+  a local `u` → `parsed_uri` in `Aws_http.request`, and 4 test helpers narrowed
+  from the full `Eio.Stdenv.t` to just the `net` capability they actually use.
