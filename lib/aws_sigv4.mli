@@ -38,16 +38,13 @@ val hashed_canonical_request : request -> string
 
 val canonical_uri : normalize_path:bool -> string -> string
 (** The exact path bytes used both for signing and for the wire request line.
-    [Aws_http] reuses this directly (rather than a general-purpose URI
-    library) when building the actual HTTP request — general URI libraries
-    round-trip through a more permissive RFC 3986 "safe character" set than
-    SigV4's unreserved-only rule, so a value signed via one encoder and sent
-    via another can byte-for-byte disagree, breaking the signature. Single
-    source of truth avoids that class of bug by construction. *)
+    [Aws_http] reuses this directly rather than a general-purpose URI
+    library, whose more permissive RFC 3986 escaping could byte-for-byte
+    disagree with what was signed. *)
 
 val canonical_query_string : (string * string) list -> string
 (** Same rationale as {!canonical_uri}: reused verbatim for the wire request's
-    query string, not re-derived through a different encoder. *)
+    query string. *)
 
 val string_to_sign
   :  algorithm:string

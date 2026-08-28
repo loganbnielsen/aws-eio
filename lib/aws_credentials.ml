@@ -10,20 +10,13 @@ type source =
   | Static of static
   | Web_identity of { role_arn : string; token_file : string }
       (** EKS IRSA: AssumeRoleWithWebIdentity using a Kubernetes-projected
-          service-account JWT. Sun's actual production deploy target
-          (platform/infra/aws/main.tf provisions EKS with IRSA already, for
-          cert-manager) — this is the credential source a Sun service
-          running in its real deployment environment uses, not IMDSv2. *)
+          service-account JWT. Sun's actual production credential source. *)
   | Container of { relative_uri : string }  (** ECS/Fargate task role. *)
   | Imdsv2  (** EC2 instance profile. Last resort — see [Env_chain]. *)
   | Env_chain
-      (** Try, in order: static keys from [AWS_ACCESS_KEY_ID]/
-          [AWS_SECRET_ACCESS_KEY]; IRSA from [AWS_ROLE_ARN]/
-          [AWS_WEB_IDENTITY_TOKEN_FILE]; container creds from
-          [AWS_CONTAINER_CREDENTIALS_RELATIVE_URI]; IMDSv2. This is a named,
-          chosen value — [of_env] is the only thing that picks it implicitly,
-          and does so as an explicit opt-in, not because [source] was left
-          unset. There is no default source: every [t] states one. *)
+      (** Static env vars, then IRSA env vars, then container creds env var,
+          then IMDSv2, in that order. A named, chosen value: [of_env] is the
+          only thing that picks it implicitly, as an explicit opt-in. *)
 
 type t = {
   source : source;
@@ -39,17 +32,12 @@ type resolved = {
 
 let of_env ~region () = { source = Env_chain; region }
 
-(* Minimal, deliberately non-general XML leaf-text extractor. The real
-   AssumeRoleWithWebIdentity response IS nested
-   (...Response > ...Result > Credentials > AccessKeyId, etc, confirmed
-   against AWS's live API reference) — this works anyway because it's a
-   substring search for "<Tag>text</Tag>" anywhere in the document, not a
-   structural parse, and none of the four leaf tags this module reads carry
-   attributes or a namespace prefix in the real response. Not a substitute
-   for a real XML parser — if a future caller needs anything a flat substring
-   search can't give (attributes, namespaced tags, disambiguating same-named
-   tags at different nesting levels), that's the signal to add xmlm as a real
-   dependency instead of growing this function. *)
+(* Deliberately non-general: a substring search for "<Tag>text</Tag>" rather
+   than a structural XML parse. Works because none of the four leaf tags this
+   module reads carry attributes or a namespace prefix in the real (nested)
+   AssumeRoleWithWebIdentity response. If a caller ever needs attributes,
+   namespaces, or disambiguating same-named tags, switch to a real parser
+   (xmlm) instead of growing this function. *)
 let extract_tag tag xml =
   let open_tag = "<" ^ tag ^ ">" and close_tag = "</" ^ tag ^ ">" in
   let hlen = String.length xml and olen = String.length open_tag in
@@ -78,19 +66,13 @@ let read_token_file path =
   try Ok (String.trim (In_channel.with_open_text path In_channel.input_all))
   with Sys_error msg -> Error (credential_error ("cannot read web identity token file: " ^ msg))
 
-(* Regional STS endpoints are the documented modern default (lower latency,
-   narrower failure domain than the legacy global sts.amazonaws.com).
-   AWS_STS_REGIONAL_ENDPOINTS=legacy opting back into the global endpoint is
-   not implemented — flagged as a gap, not silently ignored. Also standard
-   -partition only: China regions (cn-north-1/cn-northwest-1) use
-   amazonaws.com.cn, not amazonaws.com — not handled here, since Sun's
+(* Regional STS endpoints only (AWS's documented default); AWS_STS_REGIONAL_ENDPOINTS=legacy
+   is not implemented, and China-partition hosts (amazonaws.com.cn) are not handled — Sun's
    deploy target is standard-partition EKS. *)
 let sts_host region = Printf.sprintf "sts.%s.amazonaws.com" region
 
-(* AssumeRoleWithWebIdentity is deliberately called unsigned (Aws_http.request,
-   not Aws_http.signed_request): this call is how a caller without any AWS
-   credentials yet bootstraps its first set. Signing it would require the
-   credentials it exists to produce. *)
+(* Deliberately unsigned (Aws_http.request, not signed_request): this call
+   bootstraps the caller's first credentials, so it can't require them. *)
 let resolve_web_identity ~net ~clock ~region ~role_arn ~token_file =
   let* token = read_token_file token_file in
   let body =
@@ -127,10 +109,8 @@ let resolved_of_json_credentials json_body =
     Ok { access_key_id; secret_access_key; session_token; expiration }
   with _ -> Error (credential_error "malformed JSON credentials response")
 
-(* aws-audit.md calls for a short timeout on IMDSv2 specifically: it is
-   SSRF-adjacent (a caller-influenced code path ending up here would probe an
-   internal link-local address), so failing fast matters more than tolerating
-   a slow/absent link — real IMDS responses on EC2 are near-instant. *)
+(* Short timeout: IMDSv2 is SSRF-adjacent (see aws-audit.md), so failing fast
+   beats tolerating a slow/absent link — real IMDS responses are near-instant. *)
 let imdsv2_timeout = 1.0
 
 let resolve_imdsv2 ~net ~clock =

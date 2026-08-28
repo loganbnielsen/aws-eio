@@ -1,9 +1,7 @@
 (* Web_identity/Container/Imdsv2 can't be exercised against real AWS/IMDS
-   endpoints from a unit test — these tests validate the response-parsing
-   helpers behind them against realistic sample payloads instead (STS's
-   AssumeRoleWithWebIdentity response shape is from AWS's own published API
-   reference example; the IMDS shape matches its documented security
-   -credentials response). *)
+   endpoints from a unit test, so these validate the response-parsing helpers
+   against realistic sample payloads (from AWS's own published API/IMDS
+   examples) instead. *)
 
 let sts_response_xml =
   {|<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">

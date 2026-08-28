@@ -1,21 +1,10 @@
-(* Live AWS smoke test — see project/tickets/READY_FOR_ENGINEERING/AWS-001.md
-   (in the Sun monorepo) for the full plan. Skipped entirely unless
-   AWS_EIO_LIVE=1 is set: the default `dune runtest` must never touch a real
-   AWS account. STS GetCallerIdentity only — no S3 or any other
-   resource-creating call lands here yet; that is deliberately a separate,
-   later step (S3 needs a caller-provided bucket, this does not).
-
-   AWS documents GetCallerIdentity as requiring no IAM permission and
-   carrying no charge, so this is the cheapest possible proof that a real
-   SigV4 signature produced by this package is accepted by the real service
-   — not just by this repo's own conformance-suite vectors or a local mock
-   server.
-
-   Required environment: AWS_EIO_LIVE=1, plus credentials Aws_credentials's
-   Env_chain already knows how to read (AWS_ACCESS_KEY_ID /
-   AWS_SECRET_ACCESS_KEY, optionally AWS_SESSION_TOKEN). AWS_REGION is
-   optional, defaulting to us-east-1 — GetCallerIdentity's answer does not
-   depend on region. *)
+(* Live AWS smoke test — see project/tickets/READY_FOR_ENGINEERING/AWS-001.md.
+   Skipped unless AWS_EIO_LIVE=1 (the default `dune runtest` must never touch
+   a real AWS account). Uses STS GetCallerIdentity: free, no IAM permission
+   required, and the cheapest proof a real SigV4 signature is accepted by
+   AWS itself rather than just this repo's own vectors/mocks. Needs
+   AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (+ optional AWS_SESSION_TOKEN);
+   AWS_REGION defaults to us-east-1 since the answer doesn't depend on it. *)
 
 let live_enabled () = Sys.getenv_opt "AWS_EIO_LIVE" = Some "1"
 
