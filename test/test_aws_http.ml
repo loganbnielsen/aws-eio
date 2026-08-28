@@ -1,4 +1,4 @@
-let with_retry_server env f =
+let with_retry_server net f =
   Eio.Switch.run @@ fun sw ->
   let hits = ref 0 in
   let stop, stop_r = Eio.Promise.create () in
@@ -12,7 +12,7 @@ let with_retry_server env f =
   in
   let server = Cohttp_eio.Server.make ~callback () in
   let socket =
-    Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+    Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
   in
   let port =
     match Eio.Net.listening_addr socket with
@@ -26,7 +26,7 @@ let with_retry_server env f =
     ~finally:(fun () -> Eio.Promise.resolve stop_r ())
     (fun () -> f ~port ~hits)
 
-let with_echo_server env f =
+let with_echo_server net f =
   Eio.Switch.run @@ fun sw ->
   let stop, stop_r = Eio.Promise.create () in
   let callback _conn _req body =
@@ -34,7 +34,7 @@ let with_echo_server env f =
     Cohttp_eio.Server.respond_string ~status:`OK ~body:received ()
   in
   let server = Cohttp_eio.Server.make ~callback () in
-  let socket = Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -54,9 +54,9 @@ let with_echo_server env f =
    but no body bytes follow) or a 204. If read_response didn't special-case
    these per RFC 7230 3.3.3 rule 1, it would hang reading bytes that will
    never arrive, until the caller's request timeout. *)
-let with_raw_server env ~raw_response f =
+let with_raw_server net ~raw_response f =
   Eio.Switch.run @@ fun sw ->
-  let socket = Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -78,7 +78,7 @@ let with_raw_server env ~raw_response f =
 let test_head_response_never_reads_a_body () =
   Eio_main.run @@ fun env ->
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" in
-  with_raw_server env ~raw_response @@ fun ~port ->
+  with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
     Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
@@ -93,7 +93,7 @@ let test_head_response_never_reads_a_body () =
 let test_204_response_never_reads_a_body () =
   Eio_main.run @@ fun env ->
   let raw_response = "HTTP/1.1 204 No Content\r\nContent-Length: 50\r\n\r\n" in
-  with_raw_server env ~raw_response @@ fun ~port ->
+  with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
     Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
@@ -118,7 +118,7 @@ let test_204_response_never_reads_a_body () =
    really does see the body. *)
 let test_request_body_is_received_by_server () =
   Eio_main.run @@ fun env ->
-  with_echo_server env @@ fun ~port ->
+  with_echo_server env#net @@ fun ~port ->
   let body = "Action=AssumeRoleWithWebIdentity&RoleArn=foo&WebIdentityToken=bar" in
   let result =
     Aws_http.request ~net:env#net ~clock:env#clock ~meth:`POST
@@ -134,7 +134,7 @@ let test_request_body_is_received_by_server () =
 
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
-  with_retry_server env @@ fun ~port ~hits ->
+  with_retry_server env#net @@ fun ~port ~hits ->
   let result =
     Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
@@ -188,7 +188,7 @@ let test_wire_resource_s3_unnormalized () =
    with the exception type ONLY in the JSON body, no x-amzn-errortype header
    at all — if retry classification only checked the header, this would
    never be retried. *)
-let with_body_only_throttle_server env f =
+let with_body_only_throttle_server net f =
   Eio.Switch.run @@ fun sw ->
   let hits = ref 0 in
   let stop, stop_r = Eio.Promise.create () in
@@ -201,7 +201,7 @@ let with_body_only_throttle_server env f =
     else Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok" ()
   in
   let server = Cohttp_eio.Server.make ~callback () in
-  let socket = Eio.Net.listen ~backlog:2 ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -214,7 +214,7 @@ let with_body_only_throttle_server env f =
 
 let test_retries_body_only_throttling_error () =
   Eio_main.run @@ fun env ->
-  with_body_only_throttle_server env @@ fun ~port ~hits ->
+  with_body_only_throttle_server env#net @@ fun ~port ~hits ->
   let result =
     Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
@@ -237,7 +237,7 @@ let test_retries_body_only_throttling_error () =
 let test_response_headers_are_returned () =
   Eio_main.run @@ fun env ->
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nETag: \"abc123\"\r\n\r\n" in
-  with_raw_server env ~raw_response @@ fun ~port ->
+  with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
     Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
