@@ -127,7 +127,7 @@ let run_case case () =
     | Some _ | None -> headers
   in
   let headers = if sign_body then headers @ [ ("X-Amz-Content-Sha256", payload_hash) ] else headers in
-  let request : Aws_sigv4.request = { meth; path; query; headers; payload_hash; normalize_path } in
+  let request : Aws_sigv4.signing_request = { meth; path; query; headers; payload_hash; normalize_path } in
   let expected_creq =
     strip_trailing_newline (read_file (Filename.concat dir "header-canonical-request.txt"))
   in

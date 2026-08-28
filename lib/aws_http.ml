@@ -211,7 +211,7 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
       | Some b -> headers @ [ ("content-length", string_of_int (String.length b)) ]
       | None -> headers
     in
-    let sigv4_request : Aws_sigv4.request =
+    let sigv4_request : Aws_sigv4.signing_request =
       { meth = Http.Method.to_string meth; path; query; headers; payload_hash; normalize_path }
     in
     let authorization =
