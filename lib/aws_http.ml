@@ -190,12 +190,12 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
    here. [?timeout] defaults to 10s; IMDSv2 callers pass a short one — that
    endpoint is SSRF-adjacent (see aws-audit.md) and should fail fast. *)
 let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers ?body () =
-  let u = Uri.of_string uri in
-  let https = match Uri.scheme u with Some "https" -> true | _ -> false in
+  let parsed_uri = Uri.of_string uri in
+  let https = match Uri.scheme parsed_uri with Some "https" -> true | _ -> false in
   let scheme = if https then "https" else "http" in
-  let host = Uri.host_with_default ~default:"localhost" u in
-  let port = Uri.port u in
-  let resource = Uri.path_and_query u in
+  let host = Uri.host_with_default ~default:"localhost" parsed_uri in
+  let port = Uri.port parsed_uri in
+  let resource = Uri.path_and_query parsed_uri in
   let rec attempt n =
     match request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body with
     | Ok (status, resp_headers, resp_body)
