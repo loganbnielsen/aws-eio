@@ -163,8 +163,8 @@ let authorization_header ~access_key_id ~credential_scope ~signed_headers ~signa
 let sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request =
   let date = String.sub amz_date 0 8 in
   let credential_scope = Printf.sprintf "%s/%s/%s/aws4_request" date region service in
-  let sts = string_to_sign ~algorithm:"AWS4-HMAC-SHA256" ~amz_date ~credential_scope ~request in
+  let to_sign = string_to_sign ~algorithm:"AWS4-HMAC-SHA256" ~amz_date ~credential_scope ~request in
   let key = signing_key ~secret_access_key ~date ~region ~service in
-  let sig_ = signature ~signing_key:key ~string_to_sign:sts in
+  let sig_ = signature ~signing_key:key ~string_to_sign:to_sign in
   let _, signed_headers = canonical_headers request.headers in
   authorization_header ~access_key_id ~credential_scope ~signed_headers ~signature:sig_
