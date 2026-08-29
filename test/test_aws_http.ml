@@ -175,6 +175,17 @@ let test_request_rejects_crlf_header () =
   Alcotest.(check bool) "CRLF rejected" true
     (match result with Error (Aws_error.Network_error _) -> true | _ -> false)
 
+let test_request_rejects_invalid_uri () =
+  Eio_main.run @@ fun env ->
+  List.iter
+    (fun uri ->
+      let result =
+        Aws_http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET ~uri ~headers:[] ()
+      in
+      Alcotest.(check bool) uri true
+        (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
+    [ "file:///tmp/aws.sock"; "/latest/meta-data" ]
+
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env#net @@ fun ~port ~hits ->
@@ -266,6 +277,8 @@ let () =
       ( "request validation",
         [ Alcotest.test_case "Host header is added" `Quick test_request_adds_host_header;
           Alcotest.test_case "CRLF in headers is rejected" `Quick test_request_rejects_crlf_header;
+          Alcotest.test_case "invalid URI is rejected before network I/O" `Quick
+            test_request_rejects_invalid_uri;
         ] );
       ( "response body framing",
         [ Alcotest.test_case "HEAD response never reads a body" `Quick

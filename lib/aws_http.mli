@@ -26,7 +26,9 @@ val request
     responses classified retryable by {!Aws_error} status/body inspection
     (429, 5xx, and 400s with a known-retryable [x-amzn-errortype]); a
     non-2xx, non-retryable response returns [Error (Http_error (status,
-    body))]. Pass a short [?timeout] for SSRF-adjacent endpoints like IMDS. *)
+    body))]. [uri] must be an absolute [http://] or [https://] URL with a
+    host; unsupported or relative URIs return [Error (Network_error _)]. Pass
+    a short [?timeout] for SSRF-adjacent endpoints like IMDS. *)
 
 val signed_request
   :  ?max_retries:int
