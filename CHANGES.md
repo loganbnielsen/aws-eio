@@ -1,5 +1,11 @@
 # Changes
 
+## Unreleased
+
+- Local HTTP transport tests now skip when the OS sandbox rejects loopback
+  listener setup with `EPERM`/`EACCES`, which keeps opam-repository macOS
+  sandbox builds from failing on tests that require `bind(2)`.
+
 ## 0.1.0
 
 - Initial standalone OPAM package: `Aws_sigv4` (AWS Signature Version 4 request

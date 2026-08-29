@@ -1,3 +1,9 @@
+let listen_loopback ~sw net =
+  try Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  with
+  | Unix.Unix_error ((Unix.EPERM | Unix.EACCES), "bind", _) ->
+    Alcotest.skip ()
+
 let with_retry_server net f =
   Eio.Switch.run @@ fun sw ->
   let hits = ref 0 in
@@ -11,9 +17,7 @@ let with_retry_server net f =
     Cohttp_eio.Server.respond_string ~status ~body ()
   in
   let server = Cohttp_eio.Server.make ~callback () in
-  let socket =
-    Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
+  let socket = listen_loopback ~sw net in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -34,7 +38,7 @@ let with_echo_server net f =
     Cohttp_eio.Server.respond_string ~status:`OK ~body:received ()
   in
   let server = Cohttp_eio.Server.make ~callback () in
-  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = listen_loopback ~sw net in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -52,7 +56,7 @@ let with_echo_server net f =
    3.3.3 rule 1, or it would hang until the caller's timeout. *)
 let with_raw_server net ~raw_response f =
   Eio.Switch.run @@ fun sw ->
-  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = listen_loopback ~sw net in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -74,7 +78,7 @@ let with_raw_server net ~raw_response f =
 let with_capture_server net f =
   Eio.Switch.run @@ fun sw ->
   let seen, set_seen = Eio.Promise.create () in
-  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = listen_loopback ~sw net in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
@@ -204,7 +208,7 @@ let with_body_only_throttle_server net f =
     else Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok" ()
   in
   let server = Cohttp_eio.Server.make ~callback () in
-  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let socket = listen_loopback ~sw net in
   let port =
     match Eio.Net.listening_addr socket with
     | `Tcp (_, port) -> port
