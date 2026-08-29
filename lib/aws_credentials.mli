@@ -41,19 +41,3 @@ val resolve : net:_ Eio.Net.t -> clock:_ Eio.Time.clock -> t -> (resolved, Aws_e
     Callers that hold a [t] across many requests should cache the result and
     re-resolve once [resolved.expiration] approaches — this function does not
     cache or refresh on your behalf. *)
-
-(** {2 Exposed for testing}
-
-    The response-parsing helpers behind {!resolve}'s network-backed sources.
-    Tested directly against realistic sample payloads, since none of
-    Web_identity/Container/Imdsv2 can be exercised against real AWS
-    endpoints from a unit test. *)
-
-val extract_tag : string -> string -> string option
-(** [extract_tag "AccessKeyId" xml] reads flat [<Tag>text</Tag>] leaf content.
-    Deliberately minimal — see the doc comment in [aws_credentials.ml] for
-    what it does not handle. *)
-
-val resolved_of_json_credentials : string -> (resolved, Aws_error.t) result
-(** Parses the IMDSv2 / ECS container-credentials JSON response shape
-    ([AccessKeyId]/[SecretAccessKey]/[Token]/[Expiration]). *)

@@ -27,6 +27,21 @@ let connect ~sw ~net ~scheme ~host ~port =
   | addr :: _ -> Eio.Net.connect ~sw net addr
   | [] -> failwith ("Aws_http: cannot resolve host " ^ host)
 
+let has_crlf s = String.exists (fun c -> c = '\r' || c = '\n') s
+
+let host_header ~scheme ~host ~port =
+  match (scheme, port) with
+  | "http", Some 80 | "https", Some 443 | _, None -> host
+  | _, Some port -> Printf.sprintf "%s:%d" host port
+
+let validate_wire_inputs ~host ~resource ~headers =
+  if has_crlf host then Error "host contains a CR or LF character"
+  else if has_crlf resource then Error "request resource contains a CR or LF character"
+  else
+    match List.find_opt (fun (k, v) -> has_crlf k || has_crlf v) headers with
+    | None -> Ok ()
+    | Some (k, _) -> Error ("header contains a CR or LF character: " ^ k)
+
 (* A body without Content-Length is treated as bodyless by a spec-compliant
    server (RFC 7230 3.3.2/3.3.3). Added here defensively so every caller
    (including unsigned STS/IMDS calls) gets it; skipped if already present,
@@ -136,15 +151,18 @@ let is_retryable_response ~status ~headers ~body =
   | _ -> false
 
 let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
-  try
-    Eio.Time.with_timeout_exn clock timeout (fun () ->
-        Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
-  with
-  | Eio.Time.Timeout -> Error (Aws_error.Network_error "request timed out")
-  (* Re-raised, never converted to Error: cancellation must unwind the
-     caller's structured concurrency, not read as an ordinary failure. *)
-  | Eio.Cancel.Cancelled _ as exn -> raise exn
-  | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))
+  match validate_wire_inputs ~host ~resource ~headers with
+  | Error msg -> Error (Aws_error.Network_error msg)
+  | Ok () -> (
+    try
+      Eio.Time.with_timeout_exn clock timeout (fun () ->
+          Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
+    with
+    | Eio.Time.Timeout -> Error (Aws_error.Network_error "request timed out")
+    (* Re-raised, never converted to Error: cancellation must unwind the
+       caller's structured concurrency, not read as an ordinary failure. *)
+    | Eio.Cancel.Cancelled _ as exn -> raise exn
+    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn)))
 
 (* Unsigned escape hatch for credential-bootstrap calls (STS
    AssumeRoleWithWebIdentity, IMDSv2) that can't require credentials they
@@ -159,6 +177,10 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
   let host = Uri.host_with_default ~default:"localhost" parsed_uri in
   let port = Uri.port parsed_uri in
   let resource = Uri.path_and_query parsed_uri in
+  let headers =
+    if List.exists (fun (k, _) -> String.lowercase_ascii k = "host") headers then headers
+    else ("Host", host_header ~scheme ~host ~port) :: headers
+  in
   let rec attempt n =
     match request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body with
     | Ok (status, resp_headers, resp_body)
@@ -176,7 +198,7 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
   attempt 0
 
 (* Reuses Aws_sigv4's own encoders so the wire request line matches exactly
-   what was signed — see the module-top comment. Exposed for testing. *)
+   what was signed — see the module-top comment. *)
 let wire_resource ~normalize_path ~path ~query =
   let uri_path = Aws_sigv4.canonical_uri ~normalize_path path in
   match query with [] -> uri_path | _ -> uri_path ^ "?" ^ Aws_sigv4.canonical_query_string query
@@ -192,14 +214,14 @@ let amz_date_now clock =
    reported as Signature_error, not folded into the I/O try/with below.
    Eio.Cancel.Cancelled is always re-raised, never converted to an Error. *)
 let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token ~region ~service ~normalize_path
-    ~meth ~host ~path ~query ~extra_headers ~payload_hash ~body () =
+    ~meth ~host_header ~path ~query ~extra_headers ~payload_hash ~body () =
   try
     let amz_date = amz_date_now clock in
     let payload_hash =
       match payload_hash with Some h -> h | None -> Aws_sigv4.sha256_hex (Option.value body ~default:"")
     in
     let headers =
-      ("host", host) :: ("x-amz-date", amz_date) :: ("x-amz-content-sha256", payload_hash) :: extra_headers
+      ("host", host_header) :: ("x-amz-date", amz_date) :: ("x-amz-content-sha256", payload_hash) :: extra_headers
     in
     let headers =
       match session_token with None -> headers | Some t -> headers @ [ ("x-amz-security-token", t) ]
@@ -224,16 +246,17 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
 
 let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
     ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
+  let scheme = "https" in
+  let host_header = host_header ~scheme ~host ~port in
   match
     build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token ~region ~service ~normalize_path
-      ~meth ~host ~path ~query ~extra_headers ~payload_hash ~body ()
+      ~meth ~host_header ~path ~query ~extra_headers ~payload_hash ~body ()
   with
   | Error _ as e -> e
   | Ok headers -> (
     try
       let resource = wire_resource ~normalize_path ~path ~query in
       let https = true in
-      let scheme = "https" in
       let rec attempt n =
         match
           request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth

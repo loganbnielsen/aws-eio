@@ -1,4 +1,4 @@
-(** HTTP transport shared by every aws-eio backend: TLS (via {!Aws_tls}),
+(** HTTP transport shared by every aws-eio backend: TLS (via [https-eio]),
     exponential backoff with full jitter on retryable failures, and SigV4
     signing.
 
@@ -43,10 +43,8 @@ val signed_request
   -> meth:Http.Method.t
   -> host:string
   -> ?port:int
-      (** Used only to open the TCP connection — the signed and sent [Host]
-          header is [host] alone, with no port suffix. A non-AWS test server
-          on a non-standard port thus gets a [Host] header that doesn't name
-          the real destination. *)
+      (** Used to open the TCP connection and, when non-default, included in
+          the signed and sent [Host] header. *)
   -> path:string
   -> ?query:(string * string) list
   -> ?extra_headers:(string * string) list
@@ -64,12 +62,3 @@ val signed_request
     HTTP endpoints worth signing for. Response headers are returned exactly
     as the server sent them (no case-normalization — compare case-
     insensitively), on success only, same caveat as {!request} above. *)
-
-(** {2 Exposed for testing} *)
-
-val wire_resource : normalize_path:bool -> path:string -> query:(string * string) list -> string
-(** The exact request-line resource (path[?query]) {!signed_request} both
-    signs and sends. Tested directly against characters RFC 3986 permits
-    unescaped in a URI but that SigV4 requires escaped (["!*'();:@$,+"]) —
-    the class of character that motivated bypassing a general-purpose URI
-    library for this. *)
