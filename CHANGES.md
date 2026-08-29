@@ -7,6 +7,8 @@
   sandbox builds from failing on tests that require `bind(2)`.
 - `Aws_http.request` now rejects non-HTTP and relative URIs before network I/O
   instead of silently treating them as plain HTTP requests.
+- `Aws_http.signed_request` now rejects invalid explicit ports before signing
+  or network I/O.
 
 ## 0.1.0
 

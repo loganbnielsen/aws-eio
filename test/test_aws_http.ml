@@ -186,6 +186,19 @@ let test_request_rejects_invalid_uri () =
         (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
     [ "file:///tmp/aws.sock"; "/latest/meta-data" ]
 
+let test_request_rejects_invalid_port () =
+  Eio_main.run @@ fun env ->
+  List.iter
+    (fun port ->
+      let result =
+        Aws_http.signed_request ~max_retries:0 ~net:env#net ~clock:env#clock
+          ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
+          ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"localhost" ~port ~path:"/" ()
+      in
+      Alcotest.(check bool) (string_of_int port) true
+        (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
+    [ 0; -1; 65536 ]
+
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env#net @@ fun ~port ~hits ->
@@ -279,6 +292,8 @@ let () =
           Alcotest.test_case "CRLF in headers is rejected" `Quick test_request_rejects_crlf_header;
           Alcotest.test_case "invalid URI is rejected before network I/O" `Quick
             test_request_rejects_invalid_uri;
+          Alcotest.test_case "invalid port is rejected before network I/O" `Quick
+            test_request_rejects_invalid_port;
         ] );
       ( "response body framing",
         [ Alcotest.test_case "HEAD response never reads a body" `Quick

@@ -34,6 +34,11 @@ let host_header ~scheme ~host ~port =
   | "http", Some 80 | "https", Some 443 | _, None -> host
   | _, Some port -> Printf.sprintf "%s:%d" host port
 
+let validate_port = function
+  | Some port when port <= 0 || port > 65535 ->
+    Error (Printf.sprintf "port must be between 1 and 65535, got %d" port)
+  | _ -> Ok ()
+
 let validate_wire_inputs ~host ~resource ~headers =
   if has_crlf host then Error "host contains a CR or LF character"
   else if has_crlf resource then Error "request resource contains a CR or LF character"
@@ -163,6 +168,9 @@ let is_retryable_response ~status ~headers ~body =
   | _ -> false
 
 let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
+  match validate_port port with
+  | Error msg -> Error (Aws_error.Network_error msg)
+  | Ok () -> (
   match validate_wire_inputs ~host ~resource ~headers with
   | Error msg -> Error (Aws_error.Network_error msg)
   | Ok () -> (
@@ -174,7 +182,7 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
     (* Re-raised, never converted to Error: cancellation must unwind the
        caller's structured concurrency, not read as an ordinary failure. *)
     | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn)))
+    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))))
 
 (* Unsigned escape hatch for credential-bootstrap calls (STS
    AssumeRoleWithWebIdentity, IMDSv2) that can't require credentials they
