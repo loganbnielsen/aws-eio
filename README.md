@@ -164,6 +164,10 @@ val signed_request
   -> unit -> (int * (string * string) list * string, Aws_error.t) result
 ```
 
+`request` adds a `Host` header from `uri` when the caller did not provide one.
+Both `request` and `signed_request` reject CR/LF in wire-significant host,
+resource, and header strings before sending bytes.
+
 **Does not use `cohttp-eio`'s `Client`.** That client always derives the wire request
 line from `Uri.path_and_query`, which decodes then re-encodes using a more permissive
 RFC 3986 "safe character" set than SigV4 requires — confirmed by hand:
@@ -172,7 +176,7 @@ literal `!`. A request signed with one encoding and sent with another fails AWS'
 signature check for any query value containing `! * ' ( ) : @ $ , +`. `Aws_http`
 instead hand-writes and hand-parses the HTTP/1.1 wire format itself, with the request
 line's resource built from `Aws_sigv4.canonical_uri`/`canonical_query_string` directly
-(the same functions used for signing — see `wire_resource`, exposed for testing), not
+(the same functions used for signing inside `Aws_http`), not
 from any general-purpose URI/HTTP request type.
 
 Request bodies get an explicit `Content-Length` (RFC 7230 3.3.2/3.3.3 — no

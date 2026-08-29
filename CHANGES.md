@@ -99,6 +99,15 @@
   was independently re-verified as correct; only the test needed fixing. Fixed by
   resetting the cache to `None` immediately before the race, making the test
   self-contained regardless of execution order.
+- **Fixed (post-tag):** `Aws_http.request` now adds a `Host` header from the
+  parsed URI when callers do not provide one, which matters for unsigned
+  credential-bootstrap calls (`AssumeRoleWithWebIdentity`, IMDSv2, ECS task-role
+  credentials). `Aws_http.signed_request` now includes non-default `?port` values
+  in the signed/sent `Host` header, matching the actual destination for
+  S3-compatible endpoints and test servers. Both request paths reject CR/LF in
+  wire-significant host/resource/header strings before sending bytes.
+- Public-API cleanup: internal credential parsers and request-line construction
+  helpers are no longer exported from the installed interfaces.
 - **Extracted (post-tag): `Aws_tls` moved out to the standalone `https-eio` package.**
   The exact same TLS wrapper (rounds 4–6 above, plus the CA-bundle logic) turned out
   to also be duplicated byte-for-byte in obs-loki-eio's `Obs_loki_tls`,

@@ -71,6 +71,31 @@ let with_raw_server net ~raw_response f =
       `Stop_daemon);
   f ~port
 
+let with_capture_server net f =
+  Eio.Switch.run @@ fun sw ->
+  let seen, set_seen = Eio.Promise.create () in
+  let socket = Eio.Net.listen ~backlog:2 ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
+  let port =
+    match Eio.Net.listening_addr socket with
+    | `Tcp (_, port) -> port
+    | _ -> failwith "unexpected address family"
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      Eio.Net.accept_fork ~sw socket
+        ~on_error:(fun _ -> ())
+        (fun conn _addr ->
+          let reader = Eio.Buf_read.of_flow conn ~max_size:65536 in
+          let request_line = Eio.Buf_read.line reader in
+          let rec read_headers acc =
+            match Eio.Buf_read.line reader with
+            | "" -> List.rev acc
+            | line -> read_headers (line :: acc)
+          in
+          Eio.Promise.resolve set_seen (request_line, read_headers []);
+          Eio.Flow.copy_string "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n" conn);
+      `Stop_daemon);
+  f ~port ~seen
+
 let test_head_response_never_reads_a_body () =
   Eio_main.run @@ fun env ->
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" in
@@ -121,6 +146,31 @@ let test_request_body_is_received_by_server () =
     Alcotest.(check int) "status" 200 status;
     Alcotest.(check string) "server received the exact body sent" body echoed_body
 
+let test_request_adds_host_header () =
+  Eio_main.run @@ fun env ->
+  with_capture_server env#net @@ fun ~port ~seen ->
+  let result =
+    Aws_http.request ~net:env#net ~clock:env#clock ~meth:`GET
+      ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[] ()
+  in
+  (match result with
+   | Ok _ -> ()
+   | Error e -> Alcotest.fail (Aws_error.to_string e));
+  let _request_line, headers = Eio.Promise.await seen in
+  Alcotest.(check bool) "Host header includes non-default port" true
+    (List.mem (Printf.sprintf "Host: 127.0.0.1:%d" port) headers)
+
+let test_request_rejects_crlf_header () =
+  Eio_main.run @@ fun env ->
+  let result =
+    Aws_http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET
+      ~uri:"http://127.0.0.1/"
+      ~headers:[ ("X-Bad\r\nInjected", "x") ] ()
+  in
+  Alcotest.(check bool) "CRLF rejected" true
+    (match result with Error (Aws_error.Network_error _) -> true | _ -> false)
+
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env#net @@ fun ~port ~hits ->
@@ -137,32 +187,6 @@ let test_retries_429_once () =
   Alcotest.(check int) "status" 200 status;
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
-
-(* RFC 3986 permits `!*'();:@$,+` unescaped in a URI; SigV4's UriEncode()
-   requires them all percent-encoded, so a Uri-based encoder would sign and
-   send different bytes. *)
-let test_wire_resource_matches_strict_sigv4_encoding () =
-  let resource =
-    Aws_http.wire_resource ~normalize_path:true ~path:"/"
-      ~query:[ ("Param", "a!b*c'd(e)f;g:h@i$j,k+l") ]
-  in
-  Alcotest.(check string) "matches strict SigV4 percent-encoding (not Uri's more permissive rule)"
-    "/?Param=a%21b%2Ac%27d%28e%29f%3Bg%3Ah%40i%24j%2Ck%2Bl" resource
-
-let test_wire_resource_consistent_with_aws_sigv4 () =
-  (* wire_resource must never independently re-derive encoding — it should be
-     built from exactly the same Aws_sigv4 encoders used for signing. *)
-  let path = "/example space/" and query = [ ("a", "b c"); ("x", "1 2") ] in
-  let expected =
-    Aws_sigv4.canonical_uri ~normalize_path:true path ^ "?" ^ Aws_sigv4.canonical_query_string query
-  in
-  Alcotest.(check string) "wire_resource == Aws_sigv4's own canonical encoders" expected
-    (Aws_http.wire_resource ~normalize_path:true ~path ~query)
-
-let test_wire_resource_s3_unnormalized () =
-  (* S3 mode: no dot-segment removal/slash-collapsing, still percent-encoded. *)
-  let resource = Aws_http.wire_resource ~normalize_path:false ~path:"//example//" ~query:[] in
-  Alcotest.(check string) "S3 unnormalized path preserved" "//example//" resource
 
 (* Sends a 400 with the throttling exception type only in the JSON body, no
    x-amzn-errortype header — retry classification must fall back to the body
@@ -235,18 +259,15 @@ let () =
         [ Alcotest.test_case "POST body is received by a spec-compliant server" `Quick
             test_request_body_is_received_by_server;
         ] );
+      ( "request validation",
+        [ Alcotest.test_case "Host header is added" `Quick test_request_adds_host_header;
+          Alcotest.test_case "CRLF in headers is rejected" `Quick test_request_rejects_crlf_header;
+        ] );
       ( "response body framing",
         [ Alcotest.test_case "HEAD response never reads a body" `Quick
             test_head_response_never_reads_a_body;
           Alcotest.test_case "204 response never reads a body" `Quick test_204_response_never_reads_a_body;
           Alcotest.test_case "response headers are returned to the caller" `Quick
             test_response_headers_are_returned;
-        ] );
-      ( "wire_resource",
-        [ Alcotest.test_case "matches strict SigV4 encoding, not Uri's" `Quick
-            test_wire_resource_matches_strict_sigv4_encoding;
-          Alcotest.test_case "stays consistent with Aws_sigv4's own encoders" `Quick
-            test_wire_resource_consistent_with_aws_sigv4;
-          Alcotest.test_case "S3 unnormalized path mode" `Quick test_wire_resource_s3_unnormalized;
         ] );
     ]
