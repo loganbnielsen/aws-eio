@@ -42,6 +42,18 @@ let validate_wire_inputs ~host ~resource ~headers =
     | None -> Ok ()
     | Some (k, _) -> Error ("header contains a CR or LF character: " ^ k)
 
+let parse_uri uri =
+  let parsed_uri = Uri.of_string uri in
+  match Uri.scheme parsed_uri with
+  | Some ("http" | "https" as scheme) -> (
+    match Uri.host parsed_uri with
+    | Some host when host <> "" ->
+      let https = scheme = "https" in
+      Ok (https, scheme, host, Uri.port parsed_uri, Uri.path_and_query parsed_uri)
+    | _ -> Error "URI must include a host")
+  | Some scheme -> Error ("unsupported URI scheme: " ^ scheme)
+  | None -> Error "URI must include an http or https scheme"
+
 (* A body without Content-Length is treated as bodyless by a spec-compliant
    server (RFC 7230 3.3.2/3.3.3). Added here defensively so every caller
    (including unsigned STS/IMDS calls) gets it; skipped if already present,
@@ -171,31 +183,28 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
    [?timeout] defaults to 10s; IMDSv2 callers pass a short one (SSRF-adjacent,
    see aws-audit.md). *)
 let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers ?body () =
-  let parsed_uri = Uri.of_string uri in
-  let https = match Uri.scheme parsed_uri with Some "https" -> true | _ -> false in
-  let scheme = if https then "https" else "http" in
-  let host = Uri.host_with_default ~default:"localhost" parsed_uri in
-  let port = Uri.port parsed_uri in
-  let resource = Uri.path_and_query parsed_uri in
-  let headers =
-    if List.exists (fun (k, _) -> String.lowercase_ascii k = "host") headers then headers
-    else ("Host", host_header ~scheme ~host ~port) :: headers
-  in
-  let rec attempt n =
-    match request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body with
-    | Ok (status, resp_headers, resp_body)
-      when is_retryable_response ~status ~headers:resp_headers ~body:resp_body && n < max_retries ->
-      Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-      attempt (n + 1)
-    | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
-      Ok (status, resp_headers, resp_body)
-    | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
-    | Error _ when n < max_retries ->
-      Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
-      attempt (n + 1)
-    | Error _ as e -> e
-  in
-  attempt 0
+  match parse_uri uri with
+  | Error msg -> Error (Aws_error.Network_error msg)
+  | Ok (https, scheme, host, port, resource) ->
+    let headers =
+      if List.exists (fun (k, _) -> String.lowercase_ascii k = "host") headers then headers
+      else ("Host", host_header ~scheme ~host ~port) :: headers
+    in
+    let rec attempt n =
+      match request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body with
+      | Ok (status, resp_headers, resp_body)
+        when is_retryable_response ~status ~headers:resp_headers ~body:resp_body && n < max_retries ->
+        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+        attempt (n + 1)
+      | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
+        Ok (status, resp_headers, resp_body)
+      | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
+      | Error _ when n < max_retries ->
+        Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
+        attempt (n + 1)
+      | Error _ as e -> e
+    in
+    attempt 0
 
 (* Reuses Aws_sigv4's own encoders so the wire request line matches exactly
    what was signed — see the module-top comment. *)

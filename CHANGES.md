@@ -5,6 +5,8 @@
 - Local HTTP transport tests now skip when the OS sandbox rejects loopback
   listener setup with `EPERM`/`EACCES`, which keeps opam-repository macOS
   sandbox builds from failing on tests that require `bind(2)`.
+- `Aws_http.request` now rejects non-HTTP and relative URIs before network I/O
+  instead of silently treating them as plain HTTP requests.
 
 ## 0.1.0
 
