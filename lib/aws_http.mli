@@ -46,7 +46,8 @@ val signed_request
   -> host:string
   -> ?port:int
       (** Used to open the TCP connection and, when non-default, included in
-          the signed and sent [Host] header. *)
+          the signed and sent [Host] header. Must be between 1 and 65535
+          when supplied. *)
   -> path:string
   -> ?query:(string * string) list
   -> ?extra_headers:(string * string) list
