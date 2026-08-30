@@ -70,6 +70,7 @@ let read_token_file ~fs path =
   try Ok (String.trim (Eio.Path.load Eio.Path.(fs / path)))
   with
   | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
   | exn -> Error (credential_error ("cannot read web identity token file: " ^ Printexc.to_string exn))
 
 (* Regional STS endpoints only (AWS's documented default); AWS_STS_REGIONAL_ENDPOINTS=legacy
