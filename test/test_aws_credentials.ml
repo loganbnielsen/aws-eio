@@ -39,6 +39,19 @@ let test_of_env_picks_env_chain () =
   Alcotest.(check bool) "source is Env_chain" true (t.source = Aws_credentials.Env_chain);
   Alcotest.(check string) "region" "us-west-2" t.region
 
+let test_container_relative_uri_must_be_path_relative () =
+  Eio_main.run @@ fun env ->
+  List.iter
+    (fun relative_uri ->
+      let t : Aws_credentials.t =
+        { source = Aws_credentials.Container { relative_uri }; region = "us-east-1" }
+      in
+      match Aws_credentials.resolve ~net:env#net ~clock:env#clock ~fs:env#fs t with
+      | Error (Aws_error.Credential_error _) -> ()
+      | Error e -> Alcotest.failf "expected Credential_error, got: %s" (Aws_error.to_string e)
+      | Ok _ -> Alcotest.fail "expected invalid container relative_uri to fail")
+    [ ""; "@example.com/creds"; "http://example.com/creds"; "/bad path"; "/bad\npath" ]
+
 let () =
   let open Alcotest in
   run "aws_credentials"
@@ -47,5 +60,7 @@ let () =
           test_case "Web_identity missing token file is a clean Error" `Quick
             test_web_identity_missing_token_file;
           test_case "of_env picks Env_chain explicitly" `Quick test_of_env_picks_env_chain;
+          test_case "Container relative_uri is anchored to metadata path" `Quick
+            test_container_relative_uri_must_be_path_relative;
         ] );
     ]

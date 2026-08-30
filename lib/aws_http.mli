@@ -33,6 +33,9 @@ val request
 val signed_request
   :  ?max_retries:int
   -> ?timeout:float
+  -> ?scheme:[ `Http | `Https ]
+      (** Default [`Https]. Use [`Http] only for local/S3-compatible custom
+          endpoints that require signed requests without TLS. *)
   -> net:_ Eio.Net.t
   -> clock:_ Eio.Time.clock
   -> access_key_id:string
@@ -61,9 +64,9 @@ val signed_request
   -> (int * (string * string) list * string, Aws_error.t) result
 (** SigV4-signs the request (adding [Host], [X-Amz-Date], and
     [X-Amz-Security-Token] if [session_token] is given, then [Authorization])
-    before sending it over HTTPS. Always HTTPS — AWS APIs do not offer plain
-    HTTP endpoints worth signing for. Response headers are returned exactly
-    as the server sent them (no case-normalization — compare case-
+    before sending it. Defaults to HTTPS; plain HTTP is only for explicitly
+    configured local/S3-compatible endpoints. Response headers are returned
+    exactly as the server sent them (no case-normalization — compare case-
     insensitively), on success only, same caveat as {!request} above.
     Re-signs (fresh [X-Amz-Date]/[Authorization]) on every retry attempt,
     not just the first — with a long [?timeout] and several retries, reusing

@@ -165,6 +165,23 @@ let test_request_adds_host_header () =
   Alcotest.(check bool) "Host header includes non-default port" true
     (List.mem (Printf.sprintf "Host: 127.0.0.1:%d" port) headers)
 
+let test_signed_request_supports_explicit_http_scheme () =
+  Eio_main.run @@ fun env ->
+  with_capture_server env#net @@ fun ~port ~seen ->
+  let result =
+    Aws_http.signed_request ~scheme:`Http ~net:env#net ~clock:env#clock
+      ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
+      ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"127.0.0.1"
+      ~port ~path:"/bucket/key" ()
+  in
+  (match result with
+   | Ok _ -> ()
+   | Error e -> Alcotest.fail (Aws_error.to_string e));
+  let request_line, headers = Eio.Promise.await seen in
+  Alcotest.(check string) "signed HTTP request line" "GET /bucket/key HTTP/1.1" request_line;
+  Alcotest.(check bool) "signed HTTP request has Authorization" true
+    (List.exists (String.starts_with ~prefix:"Authorization: AWS4-HMAC-SHA256") headers)
+
 let test_request_rejects_crlf_header () =
   Eio_main.run @@ fun env ->
   let result =
@@ -357,6 +374,8 @@ let () =
         ] );
       ( "request validation",
         [ Alcotest.test_case "Host header is added" `Quick test_request_adds_host_header;
+          Alcotest.test_case "signed requests can explicitly use HTTP" `Quick
+            test_signed_request_supports_explicit_http_scheme;
           Alcotest.test_case "CRLF in headers is rejected" `Quick test_request_rejects_crlf_header;
           Alcotest.test_case "invalid URI is rejected before network I/O" `Quick
             test_request_rejects_invalid_uri;

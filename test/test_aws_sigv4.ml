@@ -145,7 +145,11 @@ let run_case case () =
   let sig_ = Aws_sigv4.signature ~signing_key:key ~string_to_sign:to_sign in
   Alcotest.(check string) (case ^ ": signature") expected_sig sig_;
   (* also exercise the end-to-end `sign` entry point *)
-  let authz = Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request in
+  let authz =
+    match Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request with
+    | Ok authz -> authz
+    | Error msg -> Alcotest.fail msg
+  in
   let expected_authz_suffix = "Signature=" ^ expected_sig in
   let suffix_len = String.length expected_authz_suffix in
   let has_expected_suffix =
@@ -156,8 +160,29 @@ let run_case case () =
     (case ^ ": sign() authorization header contains expected signature")
     true has_expected_suffix
 
+let test_sign_rejects_malformed_amz_date () =
+  let request : Aws_sigv4.signing_request =
+    { meth = "GET";
+      path = "/";
+      query = [];
+      headers = [ ("host", "example.com"); ("x-amz-date", "bad") ];
+      payload_hash = Aws_sigv4.sha256_hex "";
+      normalize_path = true;
+    }
+  in
+  match
+    Aws_sigv4.sign ~access_key_id:"AKID" ~secret_access_key:"SECRET"
+      ~region:"us-east-1" ~service:"execute-api" ~amz_date:"bad" request
+  with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "expected malformed amz_date to return Error"
+
 let () =
   let cases = case_names () in
   Alcotest.run "aws_sigv4"
     [ ( "aws-c-auth conformance suite",
-        List.map (fun case -> Alcotest.test_case case `Quick (run_case case)) cases ) ]
+        List.map (fun case -> Alcotest.test_case case `Quick (run_case case)) cases );
+      ( "contract",
+        [ Alcotest.test_case "sign rejects malformed amz_date" `Quick
+            test_sign_rejects_malformed_amz_date ] );
+    ]
