@@ -213,8 +213,9 @@ never retried.
   re-raised, never converted to an `Error` — a cancellation has to unwind the
   caller's structured concurrency correctly, the same rule this author's `obs-eio`
   documents for its own backend calls. Every other exception (including from the raw
-  socket/TLS/parsing code, and from `signed_request`'s own pre-request setup, e.g. a
-  clock returning an out-of-range time) is caught and converted to `Network_error`.
+  socket/TLS/parsing code) is caught and converted to `Network_error`; an exception
+  from `signed_request`'s own pre-request setup (e.g. a clock returning an
+  out-of-range time) is caught and converted to `Signature_error` instead.
   `Aws_sigv4` is the exception to the "returns result" half of this: it's a pure
   module with no I/O, its functions return plain values (not `result`), and it can
   raise on malformed input (e.g. `sign`'s `amz_date` must be a well-formed

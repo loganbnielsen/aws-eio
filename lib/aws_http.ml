@@ -21,11 +21,17 @@ let backoff_delay ~attempt ~base ~cap =
    Transfer-Encoding is not supported — fine for small JSON/XML calls, not
    for streaming a large response through this path. *)
 
+(* A distinct exception (not a bare Failure) so retryable_exception can tell
+   "DNS didn't resolve, possibly transiently" apart from a genuine programmer
+   error — the empty-address-list case is exactly the kind of transient
+   connectivity blip the retry loop exists for. *)
+exception Dns_resolution_failed of string
+
 let connect ~sw ~net ~scheme ~host ~port =
   let service = match port with Some p -> string_of_int p | None -> scheme in
   match Eio.Net.getaddrinfo_stream ~service net host with
   | addr :: _ -> Eio.Net.connect ~sw net addr
-  | [] -> failwith ("Aws_http: cannot resolve host " ^ host)
+  | [] -> raise (Dns_resolution_failed ("Aws_http: cannot resolve host " ^ host))
 
 let has_crlf s = String.exists (fun c -> c = '\r' || c = '\n') s
 
@@ -172,7 +178,7 @@ type request_failure =
   | Permanent of Aws_error.t
 
 let retryable_exception = function
-  | Unix.Unix_error _ | Sys_error _ -> true
+  | Unix.Unix_error _ | Sys_error _ | Dns_resolution_failed _ -> true
   | _ -> false
 
 let error_of_failure = function

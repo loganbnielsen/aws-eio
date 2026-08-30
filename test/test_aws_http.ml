@@ -199,6 +199,25 @@ let test_request_rejects_invalid_port () =
         (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
     [ 0; -1; 65536 ]
 
+(* Regression test: an unresolvable host used to raise a bare Failure that
+   retryable_exception didn't recognize, so a transient DNS hiccup was
+   unconditionally classified Permanent instead of Retryable. This doesn't
+   assert on retry count (no server to count hits against — DNS resolution
+   itself is what's failing) — it just confirms the failure still surfaces
+   as a clean Error within a bounded time, not an uncaught exception or a
+   hang, now that connect raises a dedicated exception on that path. *)
+let test_unresolvable_host_is_a_clean_error () =
+  Eio_main.run @@ fun env ->
+  match
+    Eio.Time.with_timeout env#clock 15.0 (fun () ->
+      Ok (Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+            ~uri:"http://sun-eio-test-nonexistent-host.invalid/" ~headers:[] ()))
+  with
+  | Error `Timeout -> Alcotest.fail "unresolvable host should fail fast, not hang"
+  | Ok (Error (Aws_error.Network_error _)) -> ()
+  | Ok (Error e) -> Alcotest.failf "expected Network_error, got: %s" (Aws_error.to_string e)
+  | Ok (Ok _) -> Alcotest.fail "expected an unresolvable host to fail"
+
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env#net @@ fun ~port ~hits ->
@@ -282,6 +301,8 @@ let () =
         [ Alcotest.test_case "429 is retried" `Quick test_retries_429_once;
           Alcotest.test_case "body-only (no header) throttling error is retried" `Quick
             test_retries_body_only_throttling_error;
+          Alcotest.test_case "unresolvable host fails cleanly, not with a bare Failure" `Quick
+            test_unresolvable_host_is_a_clean_error;
         ] );
       ( "request body",
         [ Alcotest.test_case "POST body is received by a spec-compliant server" `Quick
