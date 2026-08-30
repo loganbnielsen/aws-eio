@@ -64,4 +64,10 @@ val signed_request
     before sending it over HTTPS. Always HTTPS — AWS APIs do not offer plain
     HTTP endpoints worth signing for. Response headers are returned exactly
     as the server sent them (no case-normalization — compare case-
-    insensitively), on success only, same caveat as {!request} above. *)
+    insensitively), on success only, same caveat as {!request} above.
+    Re-signs (fresh [X-Amz-Date]/[Authorization]) on every retry attempt,
+    not just the first — with a long [?timeout] and several retries, reusing
+    one signature across the whole sequence could let [X-Amz-Date] drift
+    outside AWS's clock-skew tolerance by the final attempt, which would
+    surface as an ordinary non-retryable [Http_error] with no hint the real
+    cause was a stale signature. *)
