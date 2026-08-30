@@ -68,7 +68,9 @@ let truncate ~max_len s =
 
 let read_token_file ~fs path =
   try Ok (String.trim (Eio.Path.load Eio.Path.(fs / path)))
-  with exn -> Error (credential_error ("cannot read web identity token file: " ^ Printexc.to_string exn))
+  with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | exn -> Error (credential_error ("cannot read web identity token file: " ^ Printexc.to_string exn))
 
 (* Regional STS endpoints only (AWS's documented default); AWS_STS_REGIONAL_ENDPOINTS=legacy
    is not implemented, and China-partition hosts (amazonaws.com.cn) are not handled — Sun's
@@ -150,6 +152,14 @@ let resolve_imdsv2 ~net ~clock =
 
 let resolve_container ~net ~clock ~relative_uri =
   (* 169.254.170.2 is the fixed ECS/Fargate task metadata endpoint. *)
+  let valid_relative_uri =
+    String.length relative_uri > 0
+    && relative_uri.[0] = '/'
+    && String.for_all (fun c -> Char.code c > 0x20 && Char.code c <> 0x7f) relative_uri
+  in
+  if not valid_relative_uri then
+    Error (credential_error "container credentials relative_uri must be an absolute path")
+  else
   match Aws_http.request ~net ~clock ~meth:`GET ~uri:("http://169.254.170.2" ^ relative_uri) ~headers:[] () with
   | Error e -> Error e
   | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json

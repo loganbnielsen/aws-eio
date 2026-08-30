@@ -73,9 +73,10 @@ val sign
   -> service:string
   -> amz_date:string
   -> signing_request
-  -> string
+  -> (string, string) result
 (** End-to-end: derives the signing key and returns the value to send as the
     [Authorization] header. [amz_date] must be an ISO 8601 basic-format
     timestamp, e.g. ["20150830T123600Z"] — the date-only credential scope is
-    derived from its first 8 characters. Does not add [Authorization] to
-    [request.headers] for you; the caller sends it separately. *)
+    derived from its first 8 characters. Returns [Error _] if [amz_date] is
+    malformed. Does not add [Authorization] to [request.headers] for you; the
+    caller sends it separately. *)

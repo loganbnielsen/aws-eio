@@ -56,6 +56,11 @@ let connect ~sw ~net ~scheme ~host ~port =
 let has_crlf s = String.exists (fun c -> c = '\r' || c = '\n') s
 
 let host_header ~scheme ~host ~port =
+  let host =
+    if String.contains host ':' && not (String.starts_with ~prefix:"[" host) then
+      "[" ^ host ^ "]"
+    else host
+  in
   match (scheme, port) with
   | "http", Some 80 | "https", Some 443 | _, None -> host
   | _, Some port -> Printf.sprintf "%s:%d" host port
@@ -292,17 +297,16 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
     let sigv4_request : Aws_sigv4.signing_request =
       { meth = Http.Method.to_string meth; path; query; headers; payload_hash; normalize_path }
     in
-    let authorization =
-      Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date sigv4_request
-    in
-    Ok (headers @ [ ("Authorization", authorization) ])
+    match Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date sigv4_request with
+    | Error msg -> Error (Aws_error.Signature_error msg)
+    | Ok authorization -> Ok (headers @ [ ("Authorization", authorization) ])
   with
   | Eio.Cancel.Cancelled _ as exn -> raise exn
   | exn -> Error (Aws_error.Signature_error (Printexc.to_string exn))
 
-let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
+let signed_request ?max_retries ?timeout ?(scheme = `Https) ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
     ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
-  let scheme = "https" in
+  let scheme = match scheme with `Http -> "http" | `Https -> "https" in
   let host_header = host_header ~scheme ~host ~port in
   (* Re-signed on every attempt, not just the first — reusing one
      signature across retries risks X-Amz-Date drifting outside AWS's
@@ -314,7 +318,7 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
   in
   try
     let resource = wire_resource ~normalize_path ~path ~query in
-    let https = true in
+    let https = scheme = "https" in
     let rec attempt n =
       match sign () with
       | Error _ as e -> e

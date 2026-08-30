@@ -145,11 +145,29 @@ let authorization_header ~access_key_id ~credential_scope ~signed_headers ~signa
     (String.concat ";" signed_headers)
     signature
 
+let valid_basic_amz_date s =
+  let rec digits_except_markers i =
+    i = 16
+    || i = 8
+       && digits_except_markers (i + 1)
+    || i = 15
+       && digits_except_markers (i + 1)
+    || (s.[i] >= '0' && s.[i] <= '9')
+       && digits_except_markers (i + 1)
+  in
+  String.length s = 16
+  && s.[8] = 'T'
+  && s.[15] = 'Z'
+  && digits_except_markers 0
+
 let sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request =
+  if not (valid_basic_amz_date amz_date) then
+    Error ("malformed X-Amz-Date: " ^ amz_date)
+  else
   let date = String.sub amz_date 0 8 in
   let credential_scope = Printf.sprintf "%s/%s/%s/aws4_request" date region service in
   let to_sign = string_to_sign ~algorithm:"AWS4-HMAC-SHA256" ~amz_date ~credential_scope ~request in
   let key = signing_key ~secret_access_key ~date ~region ~service in
   let sig_ = signature ~signing_key:key ~string_to_sign:to_sign in
   let _, signed_headers = canonical_headers request.headers in
-  authorization_header ~access_key_id ~credential_scope ~signed_headers ~signature:sig_
+  Ok (authorization_header ~access_key_id ~credential_scope ~signed_headers ~signature:sig_)
