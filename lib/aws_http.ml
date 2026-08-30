@@ -145,7 +145,7 @@ let retryable_400_error_types =
    passthroughs omit the x-amzn-errortype header. *)
 let error_type_from_json_body body =
   match Yojson.Safe.from_string body with
-  | exception _ -> None
+  | exception Yojson.Json_error _ -> None
   | json -> (
     let field name =
       match Yojson.Safe.Util.member name json with
@@ -284,16 +284,21 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
     ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
   let scheme = "https" in
   let host_header = host_header ~scheme ~host ~port in
-  match
+  (* Re-signed on every attempt, not just the first — reusing one
+     signature across retries risks X-Amz-Date drifting outside AWS's
+     clock-skew tolerance by the final retry under a long timeout. Pure
+     computation (no I/O), so re-signing is cheap. *)
+  let sign () =
     build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token ~region ~service ~normalize_path
       ~meth ~host_header ~path ~query ~extra_headers ~payload_hash ~body ()
-  with
-  | Error _ as e -> e
-  | Ok headers -> (
-    try
-      let resource = wire_resource ~normalize_path ~path ~query in
-      let https = true in
-      let rec attempt n =
+  in
+  try
+    let resource = wire_resource ~normalize_path ~path ~query in
+    let https = true in
+    let rec attempt n =
+      match sign () with
+      | Error _ as e -> e
+      | Ok headers -> (
         match
           request_once ~net ~clock ~timeout:(Option.value timeout ~default:10.0) ~https ~scheme ~host ~port ~meth
             ~resource ~headers ~body
@@ -309,9 +314,9 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
         | Error (Retryable _) when n < Option.value max_retries ~default:3 ->
           Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
           attempt (n + 1)
-        | Error failure -> Error (error_of_failure failure)
-      in
-      attempt 0
-    with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn)))
+        | Error failure -> Error (error_of_failure failure))
+    in
+    attempt 0
+  with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))
