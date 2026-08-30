@@ -9,6 +9,8 @@
   instead of silently treating them as plain HTTP requests.
 - `Aws_http.signed_request` now rejects invalid explicit ports before signing
   or network I/O.
+- `Aws_http` no longer retries deterministic validation failures or unexpected
+  local code-path exceptions as if they were transient network failures.
 
 ## 0.1.0
 

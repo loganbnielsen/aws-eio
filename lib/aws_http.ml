@@ -167,22 +167,35 @@ let is_retryable_response ~status ~headers ~body =
       List.mem v retryable_400_error_types)
   | _ -> false
 
+type request_failure =
+  | Retryable of Aws_error.t
+  | Permanent of Aws_error.t
+
+let retryable_exception = function
+  | Unix.Unix_error _ | Sys_error _ -> true
+  | _ -> false
+
+let error_of_failure = function
+  | Retryable e | Permanent e -> e
+
 let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
   match validate_port port with
-  | Error msg -> Error (Aws_error.Network_error msg)
+  | Error msg -> Error (Permanent (Aws_error.Network_error msg))
   | Ok () -> (
-  match validate_wire_inputs ~host ~resource ~headers with
-  | Error msg -> Error (Aws_error.Network_error msg)
-  | Ok () -> (
-    try
-      Eio.Time.with_timeout_exn clock timeout (fun () ->
-          Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
-    with
-    | Eio.Time.Timeout -> Error (Aws_error.Network_error "request timed out")
-    (* Re-raised, never converted to Error: cancellation must unwind the
-       caller's structured concurrency, not read as an ordinary failure. *)
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))))
+    match validate_wire_inputs ~host ~resource ~headers with
+    | Error msg -> Error (Permanent (Aws_error.Network_error msg))
+    | Ok () -> (
+      try
+        Eio.Time.with_timeout_exn clock timeout (fun () ->
+            Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
+      with
+      | Eio.Time.Timeout -> Error (Retryable (Aws_error.Network_error "request timed out"))
+      (* Re-raised, never converted to Error: cancellation must unwind the
+         caller's structured concurrency, not read as an ordinary failure. *)
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn ->
+        let error = Aws_error.Network_error (Printexc.to_string exn) in
+        Error (if retryable_exception exn then Retryable error else Permanent error)))
 
 (* Unsigned escape hatch for credential-bootstrap calls (STS
    AssumeRoleWithWebIdentity, IMDSv2) that can't require credentials they
@@ -207,10 +220,10 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
       | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
         Ok (status, resp_headers, resp_body)
       | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
-      | Error _ when n < max_retries ->
+      | Error (Retryable _) when n < max_retries ->
         Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
         attempt (n + 1)
-      | Error _ as e -> e
+      | Error failure -> Error (error_of_failure failure)
     in
     attempt 0
 
@@ -287,10 +300,10 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
         | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
           Ok (status, resp_headers, resp_body)
         | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
-        | Error _ when n < Option.value max_retries ~default:3 ->
+        | Error (Retryable _) when n < Option.value max_retries ~default:3 ->
           Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
           attempt (n + 1)
-        | Error _ as e -> e
+        | Error failure -> Error (error_of_failure failure)
       in
       attempt 0
     with
