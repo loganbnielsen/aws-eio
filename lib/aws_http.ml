@@ -1,4 +1,24 @@
-let is_retryable status = status = 429 || status >= 500
+(* Classified via Http.Status.t's own grouping (already a dependency of
+   this library) instead of ad hoc numeric-range checks, so "is this a
+   success"/"is this retryable" has one shared, correct definition instead
+   of the range check being re-derived (and previously duplicated) at each
+   call site. Http.Status.of_int only names ~70 well-known codes and falls
+   back to `Code n for everything else (e.g. 209, or a 5xx a non-AWS proxy
+   invents) — that fallback is handled explicitly by number so an uncommon
+   but valid code still classifies the same as the original numeric-range
+   check did, not silently as neither success nor retryable. *)
+let is_success status =
+  match Http.Status.of_int status with
+  | #Http.Status.success -> true
+  | `Code n -> n >= 200 && n < 300
+  | _ -> false
+
+let is_retryable status =
+  match Http.Status.of_int status with
+  | `Too_many_requests -> true
+  | #Http.Status.server_error -> true
+  | `Code n -> n >= 500
+  | _ -> false
 
 let rng = Random.State.make_self_init ()
 let rng_mutex = Mutex.create ()
@@ -223,7 +243,7 @@ let request ?(max_retries = 3) ?(timeout = 10.0) ~net ~clock ~meth ~uri ~headers
         when is_retryable_response ~status ~headers:resp_headers ~body:resp_body && n < max_retries ->
         Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
         attempt (n + 1)
-      | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
+      | Ok (status, resp_headers, resp_body) when is_success status ->
         Ok (status, resp_headers, resp_body)
       | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
       | Error (Retryable _) when n < max_retries ->
@@ -308,7 +328,7 @@ let signed_request ?max_retries ?timeout ~net ~clock ~access_key_id ~secret_acce
                && n < Option.value max_retries ~default:3 ->
           Eio.Time.sleep clock (backoff_delay ~attempt:n ~base:0.2 ~cap:5.0);
           attempt (n + 1)
-        | Ok (status, resp_headers, resp_body) when status >= 200 && status < 300 ->
+        | Ok (status, resp_headers, resp_body) when is_success status ->
           Ok (status, resp_headers, resp_body)
         | Ok (status, _, resp_body) -> Error (Aws_error.Http_error (status, resp_body))
         | Error (Retryable _) when n < Option.value max_retries ~default:3 ->
