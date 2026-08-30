@@ -62,9 +62,13 @@ let parse_iso8601_to_unix s =
 
 let credential_error msg = Aws_error.Credential_error msg
 
-let read_token_file path =
-  try Ok (String.trim (In_channel.with_open_text path In_channel.input_all))
-  with Sys_error msg -> Error (credential_error ("cannot read web identity token file: " ^ msg))
+let truncate ~max_len s =
+  if String.length s <= max_len then s
+  else String.sub s 0 max_len ^ "... (truncated)"
+
+let read_token_file ~fs path =
+  try Ok (String.trim (Eio.Path.load Eio.Path.(fs / path)))
+  with exn -> Error (credential_error ("cannot read web identity token file: " ^ Printexc.to_string exn))
 
 (* Regional STS endpoints only (AWS's documented default); AWS_STS_REGIONAL_ENDPOINTS=legacy
    is not implemented, and China-partition hosts (amazonaws.com.cn) are not handled — Sun's
@@ -73,8 +77,8 @@ let sts_host region = Printf.sprintf "sts.%s.amazonaws.com" region
 
 (* Deliberately unsigned (Aws_http.request, not signed_request): this call
    bootstraps the caller's first credentials, so it can't require them. *)
-let resolve_web_identity ~net ~clock ~region ~role_arn ~token_file =
-  let* token = read_token_file token_file in
+let resolve_web_identity ~net ~clock ~fs ~region ~role_arn ~token_file =
+  let* token = read_token_file ~fs token_file in
   let body =
     Printf.sprintf
       "Action=AssumeRoleWithWebIdentity&Version=2011-06-15&RoleArn=%s&RoleSessionName=sun-aws-eio&WebIdentityToken=%s"
@@ -94,7 +98,10 @@ let resolve_web_identity ~net ~clock ~region ~role_arn ~token_file =
       let expiration = extract_tag "Expiration" resp_body |> Option.map parse_iso8601_to_unix |> Option.join in
       Ok { access_key_id; secret_access_key; session_token = Some session_token; expiration }
     | _ ->
-      Error (credential_error "AssumeRoleWithWebIdentity response missing AccessKeyId/SecretAccessKey/SessionToken"))
+      Error (credential_error
+        (Printf.sprintf
+           "AssumeRoleWithWebIdentity response missing AccessKeyId/SecretAccessKey/SessionToken: %s"
+           (truncate ~max_len:500 resp_body))))
 
 let resolved_of_json_credentials json_body =
   try
@@ -107,7 +114,9 @@ let resolved_of_json_credentials json_body =
       json |> member "Expiration" |> to_string_option |> Option.map parse_iso8601_to_unix |> Option.join
     in
     Ok { access_key_id; secret_access_key; session_token; expiration }
-  with _ -> Error (credential_error "malformed JSON credentials response")
+  with Yojson.Json_error _ | Yojson.Safe.Util.Type_error _ ->
+    Error (credential_error
+      (Printf.sprintf "malformed JSON credentials response: %s" (truncate ~max_len:500 json_body)))
 
 (* Short timeout: IMDSv2 is SSRF-adjacent (see aws-audit.md), so failing fast
    beats tolerating a slow/absent link — real IMDS responses are near-instant. *)
@@ -145,7 +154,7 @@ let resolve_container ~net ~clock ~relative_uri =
   | Error e -> Error e
   | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json
 
-let resolve_env_chain ~net ~clock ~region =
+let resolve_env_chain ~net ~clock ~fs ~region =
   match (Sys.getenv_opt "AWS_ACCESS_KEY_ID", Sys.getenv_opt "AWS_SECRET_ACCESS_KEY") with
   | Some access_key_id, Some secret_access_key ->
     Ok
@@ -153,19 +162,20 @@ let resolve_env_chain ~net ~clock ~region =
         expiration = None }
   | _ -> (
     match (Sys.getenv_opt "AWS_ROLE_ARN", Sys.getenv_opt "AWS_WEB_IDENTITY_TOKEN_FILE") with
-    | Some role_arn, Some token_file -> resolve_web_identity ~net ~clock ~region ~role_arn ~token_file
+    | Some role_arn, Some token_file -> resolve_web_identity ~net ~clock ~fs ~region ~role_arn ~token_file
     | _ -> (
       match Sys.getenv_opt "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" with
       | Some relative_uri -> resolve_container ~net ~clock ~relative_uri
       | None -> resolve_imdsv2 ~net ~clock))
 
-let resolve ~net ~clock (t : t) =
+let resolve ~net ~clock ~fs (t : t) =
   match t.source with
   | Static s ->
     Ok
       { access_key_id = s.access_key_id; secret_access_key = s.secret_access_key;
         session_token = s.session_token; expiration = None }
-  | Web_identity { role_arn; token_file } -> resolve_web_identity ~net ~clock ~region:t.region ~role_arn ~token_file
+  | Web_identity { role_arn; token_file } ->
+    resolve_web_identity ~net ~clock ~fs ~region:t.region ~role_arn ~token_file
   | Container { relative_uri } -> resolve_container ~net ~clock ~relative_uri
   | Imdsv2 -> resolve_imdsv2 ~net ~clock
-  | Env_chain -> resolve_env_chain ~net ~clock ~region:t.region
+  | Env_chain -> resolve_env_chain ~net ~clock ~fs ~region:t.region

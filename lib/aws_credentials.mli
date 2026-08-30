@@ -36,8 +36,16 @@ val of_env : region:string -> unit -> t
     [Env_chain] for you, and it does so as an explicit named choice a caller
     opted into by calling this function, not a silent default. *)
 
-val resolve : net:_ Eio.Net.t -> clock:_ Eio.Time.clock -> t -> (resolved, Aws_error.t) result
+val resolve
+  :  net:_ Eio.Net.t
+  -> clock:_ Eio.Time.clock
+  -> fs:_ Eio.Path.t
+  -> t
+  -> (resolved, Aws_error.t) result
 (** Performs whatever network call [t.source] requires (none for [Static]).
+    [fs] is used only for [Web_identity] (and [Env_chain] when it resolves to
+    [Web_identity]), to read the projected service-account token file through
+    Eio's filesystem capability instead of blocking stdlib I/O.
     Callers that hold a [t] across many requests should cache the result and
     re-resolve once [resolved.expiration] approaches — this function does not
     cache or refresh on your behalf. *)

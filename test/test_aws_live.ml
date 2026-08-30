@@ -22,7 +22,7 @@ let test_sts_get_caller_identity () =
     Eio_main.run @@ fun env ->
     let net = env#net and clock = env#clock in
     let region = region () in
-    match Aws_credentials.(resolve ~net ~clock (of_env ~region ())) with
+    match Aws_credentials.(resolve ~net ~clock ~fs:env#fs (of_env ~region ())) with
     | Error e -> Alcotest.failf "credential resolution failed: %s" (Aws_error.to_string e)
     | Ok creds -> (
       let host = Printf.sprintf "sts.%s.amazonaws.com" region in
