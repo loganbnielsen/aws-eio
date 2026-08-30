@@ -235,6 +235,51 @@ let test_retries_429_once () =
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
 
+(* Regression test: is_retryable/is_success classify via Http.Status.t's
+   named ~70-code grouping, which falls back to `Code n for anything else
+   (529 isn't one of the ~14 5xx codes Http.Status.of_int names). The
+   fallback must still classify by number, or an uncommon-but-real 5xx
+   would silently stop being retried and an uncommon 2xx would stop being
+   treated as success. *)
+let with_uncommon_status_retry_server net f =
+  Eio.Switch.run @@ fun sw ->
+  let hits = ref 0 in
+  let stop, stop_r = Eio.Promise.create () in
+  let callback _conn _req body =
+    ignore (Eio.Buf_read.(parse_exn take_all) body ~max_size:1024);
+    incr hits;
+    let status = if !hits = 1 then `Code 529 else `OK in
+    Cohttp_eio.Server.respond_string ~status ~body:(if !hits = 1 then "overloaded" else "ok") ()
+  in
+  let server = Cohttp_eio.Server.make ~callback () in
+  let socket = listen_loopback ~sw net in
+  let port =
+    match Eio.Net.listening_addr socket with
+    | `Tcp (_, port) -> port
+    | _ -> failwith "unexpected address family"
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      Cohttp_eio.Server.run ~stop ~on_error:(fun _ -> ()) socket server;
+      `Stop_daemon);
+  Fun.protect ~finally:(fun () -> Eio.Promise.resolve stop_r ()) (fun () -> f ~port ~hits)
+
+let test_retries_uncommon_5xx_code () =
+  Eio_main.run @@ fun env ->
+  with_uncommon_status_retry_server env#net @@ fun ~port ~hits ->
+  let result =
+    Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+      ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[] ()
+  in
+  let status, _headers, body =
+    match result with
+    | Ok v -> v
+    | Error e -> Alcotest.fail (Aws_error.to_string e)
+  in
+  Alcotest.(check int) "status" 200 status;
+  Alcotest.(check string) "body" "ok" body;
+  Alcotest.(check int) "retried once" 2 !hits
+
 (* Sends a 400 with the throttling exception type only in the JSON body, no
    x-amzn-errortype header — retry classification must fall back to the body
    field or this would never be retried. *)
@@ -299,6 +344,8 @@ let () =
   Alcotest.run "aws_http"
     [ ( "retry",
         [ Alcotest.test_case "429 is retried" `Quick test_retries_429_once;
+          Alcotest.test_case "uncommon 5xx code (not individually named) is retried" `Quick
+            test_retries_uncommon_5xx_code;
           Alcotest.test_case "body-only (no header) throttling error is retried" `Quick
             test_retries_body_only_throttling_error;
           Alcotest.test_case "unresolvable host fails cleanly, not with a bare Failure" `Quick
