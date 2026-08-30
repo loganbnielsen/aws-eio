@@ -224,6 +224,7 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
       (* Re-raised, never converted to Error: cancellation must unwind the
          caller's structured concurrency, not read as an ordinary failure. *)
       | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
       | exn ->
         let error = Aws_error.Network_error (Printexc.to_string exn) in
         Error (if retryable_exception exn then Retryable error else Permanent error)))
@@ -302,6 +303,7 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
     | Ok authorization -> Ok (headers @ [ ("Authorization", authorization) ])
   with
   | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
   | exn -> Error (Aws_error.Signature_error (Printexc.to_string exn))
 
 let signed_request ?max_retries ?timeout ?(scheme = `Https) ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
@@ -343,4 +345,5 @@ let signed_request ?max_retries ?timeout ?(scheme = `Https) ~net ~clock ~access_
     attempt 0
   with
   | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
   | exn -> Error (Aws_error.Network_error (Printexc.to_string exn))
