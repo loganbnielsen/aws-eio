@@ -110,7 +110,8 @@ let read_response ~meth flow =
   let status_line = Eio.Buf_read.line reader in
   let status =
     match String.split_on_char ' ' status_line with
-    | _proto :: code :: _ -> ( try int_of_string code with _ -> failwith ("bad status line: " ^ status_line))
+    | _proto :: code :: _ -> (
+      try int_of_string code with Failure _ -> failwith ("bad status line: " ^ status_line))
     | _ -> failwith ("malformed status line: " ^ status_line)
   in
   let rec read_headers acc =
