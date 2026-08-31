@@ -33,9 +33,6 @@ type signing_request = {
 
 val sha256_hex : string -> string
 
-val canonical_request : signing_request -> string
-val hashed_canonical_request : signing_request -> string
-
 val canonical_uri : normalize_path:bool -> string -> string
 (** The exact path bytes used both for signing and for the wire request line.
     [Aws_http] reuses this directly rather than a general-purpose URI
@@ -45,26 +42,6 @@ val canonical_uri : normalize_path:bool -> string -> string
 val canonical_query_string : (string * string) list -> string
 (** Same rationale as {!canonical_uri}: reused verbatim for the wire request's
     query string. *)
-
-val string_to_sign
-  :  algorithm:string
-  -> amz_date:string
-  -> credential_scope:string
-  -> request:signing_request
-  -> string
-
-val signing_key : secret_access_key:string -> date:string -> region:string -> service:string -> string
-(** Raw bytes (not hex) — feed directly into {!signature}. *)
-
-val signature : signing_key:string -> string_to_sign:string -> string
-(** Lowercase hex. *)
-
-val authorization_header
-  :  access_key_id:string
-  -> credential_scope:string
-  -> signed_headers:string list
-  -> signature:string
-  -> string
 
 val sign
   :  access_key_id:string

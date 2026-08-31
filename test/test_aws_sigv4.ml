@@ -128,23 +128,7 @@ let run_case case () =
   in
   let headers = if sign_body then headers @ [ ("X-Amz-Content-Sha256", payload_hash) ] else headers in
   let request : Aws_sigv4.signing_request = { meth; path; query; headers; payload_hash; normalize_path } in
-  let expected_creq =
-    strip_trailing_newline (read_file (Filename.concat dir "header-canonical-request.txt"))
-  in
-  let expected_to_sign =
-    strip_trailing_newline (read_file (Filename.concat dir "header-string-to-sign.txt"))
-  in
   let expected_sig = strip_trailing_newline (read_file (Filename.concat dir "header-signature.txt")) in
-  Alcotest.(check string) (case ^ ": canonical request") expected_creq (Aws_sigv4.canonical_request request);
-  let credential_scope = Printf.sprintf "%s/%s/%s/aws4_request" (String.sub amz_date 0 8) region service in
-  let to_sign =
-    Aws_sigv4.string_to_sign ~algorithm:"AWS4-HMAC-SHA256" ~amz_date ~credential_scope ~request
-  in
-  Alcotest.(check string) (case ^ ": string to sign") expected_to_sign to_sign;
-  let key = Aws_sigv4.signing_key ~secret_access_key ~date:(String.sub amz_date 0 8) ~region ~service in
-  let sig_ = Aws_sigv4.signature ~signing_key:key ~string_to_sign:to_sign in
-  Alcotest.(check string) (case ^ ": signature") expected_sig sig_;
-  (* also exercise the end-to-end `sign` entry point *)
   let authz =
     match Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request with
     | Ok authz -> authz
