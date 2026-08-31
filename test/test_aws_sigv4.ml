@@ -117,7 +117,7 @@ let run_case case () =
   let sign_body = ctx |> member "sign_body" |> to_bool in
   let amz_date = ctx |> member "timestamp" |> to_string |> amz_date_of_iso8601 in
   let meth, path, query, headers, body = parse_request (read_file (Filename.concat dir "request.txt")) in
-  let payload_hash = Aws_sigv4.sha256_hex body in
+  let payload_hash = Aws.Sigv4.sha256_hex body in
   (* X-Amz-Date and X-Amz-Security-Token are added by signing itself, not
      present in request.txt, so they're derived from context.json instead. *)
   let headers = headers @ [ ("X-Amz-Date", amz_date) ] in
@@ -127,10 +127,10 @@ let run_case case () =
     | Some _ | None -> headers
   in
   let headers = if sign_body then headers @ [ ("X-Amz-Content-Sha256", payload_hash) ] else headers in
-  let request : Aws_sigv4.signing_request = { meth; path; query; headers; payload_hash; normalize_path } in
+  let request : Aws.Sigv4.signing_request = { meth; path; query; headers; payload_hash; normalize_path } in
   let expected_sig = strip_trailing_newline (read_file (Filename.concat dir "header-signature.txt")) in
   let authz =
-    match Aws_sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request with
+    match Aws.Sigv4.sign ~access_key_id ~secret_access_key ~region ~service ~amz_date request with
     | Ok authz -> authz
     | Error msg -> Alcotest.fail msg
   in
@@ -145,17 +145,17 @@ let run_case case () =
     true has_expected_suffix
 
 let test_sign_rejects_malformed_amz_date () =
-  let request : Aws_sigv4.signing_request =
+  let request : Aws.Sigv4.signing_request =
     { meth = "GET";
       path = "/";
       query = [];
       headers = [ ("host", "example.com"); ("x-amz-date", "bad") ];
-      payload_hash = Aws_sigv4.sha256_hex "";
+      payload_hash = Aws.Sigv4.sha256_hex "";
       normalize_path = true;
     }
   in
   match
-    Aws_sigv4.sign ~access_key_id:"AKID" ~secret_access_key:"SECRET"
+    Aws.Sigv4.sign ~access_key_id:"AKID" ~secret_access_key:"SECRET"
       ~region:"us-east-1" ~service:"execute-api" ~amz_date:"bad" request
   with
   | Error _ -> ()

@@ -105,12 +105,12 @@ let test_head_response_never_reads_a_body () =
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" in
   with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
-    Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
+    Aws.Http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   match result with
-  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Error e -> Alcotest.fail (Aws.Error.to_string e)
   | Ok (status, _headers, body) ->
     Alcotest.(check int) "status" 200 status;
     Alcotest.(check string) "HEAD response body is empty despite Content-Length" "" body
@@ -120,12 +120,12 @@ let test_204_response_never_reads_a_body () =
   let raw_response = "HTTP/1.1 204 No Content\r\nContent-Length: 50\r\n\r\n" in
   with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
-    Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   match result with
-  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Error e -> Alcotest.fail (Aws.Error.to_string e)
   | Ok (status, _headers, body) ->
     Alcotest.(check int) "status" 204 status;
     Alcotest.(check string) "204 response body is empty despite Content-Length" "" body
@@ -139,13 +139,13 @@ let test_request_body_is_received_by_server () =
   with_echo_server env#net @@ fun ~port ->
   let body = "Action=AssumeRoleWithWebIdentity&RoleArn=foo&WebIdentityToken=bar" in
   let result =
-    Aws_http.request ~net:env#net ~clock:env#clock ~meth:`POST
+    Aws.Http.request ~net:env#net ~clock:env#clock ~meth:`POST
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[ ("Content-Type", "application/x-www-form-urlencoded") ]
       ~body ()
   in
   match result with
-  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Error e -> Alcotest.fail (Aws.Error.to_string e)
   | Ok (status, _headers, echoed_body) ->
     Alcotest.(check int) "status" 200 status;
     Alcotest.(check string) "server received the exact body sent" body echoed_body
@@ -154,13 +154,13 @@ let test_request_adds_host_header () =
   Eio_main.run @@ fun env ->
   with_capture_server env#net @@ fun ~port ~seen ->
   let result =
-    Aws_http.request ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   (match result with
    | Ok _ -> ()
-   | Error e -> Alcotest.fail (Aws_error.to_string e));
+   | Error e -> Alcotest.fail (Aws.Error.to_string e));
   let _request_line, headers = Eio.Promise.await seen in
   Alcotest.(check bool) "Host header includes non-default port" true
     (List.mem (Printf.sprintf "Host: 127.0.0.1:%d" port) headers)
@@ -169,14 +169,14 @@ let test_signed_request_supports_explicit_http_scheme () =
   Eio_main.run @@ fun env ->
   with_capture_server env#net @@ fun ~port ~seen ->
   let result =
-    Aws_http.signed_request ~scheme:`Http ~net:env#net ~clock:env#clock
+    Aws.Http.signed_request ~scheme:`Http ~net:env#net ~clock:env#clock
       ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
       ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"127.0.0.1"
       ~port ~path:"/bucket/key" ()
   in
   (match result with
    | Ok _ -> ()
-   | Error e -> Alcotest.fail (Aws_error.to_string e));
+   | Error e -> Alcotest.fail (Aws.Error.to_string e));
   let request_line, headers = Eio.Promise.await seen in
   Alcotest.(check string) "signed HTTP request line" "GET /bucket/key HTTP/1.1" request_line;
   Alcotest.(check bool) "signed HTTP request has Authorization" true
@@ -185,22 +185,22 @@ let test_signed_request_supports_explicit_http_scheme () =
 let test_request_rejects_crlf_header () =
   Eio_main.run @@ fun env ->
   let result =
-    Aws_http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:"http://127.0.0.1/"
       ~headers:[ ("X-Bad\r\nInjected", "x") ] ()
   in
   Alcotest.(check bool) "CRLF rejected" true
-    (match result with Error (Aws_error.Network_error _) -> true | _ -> false)
+    (match result with Error (Aws.Error.Network_error _) -> true | _ -> false)
 
 let test_request_rejects_invalid_uri () =
   Eio_main.run @@ fun env ->
   List.iter
     (fun uri ->
       let result =
-        Aws_http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET ~uri ~headers:[] ()
+        Aws.Http.request ~max_retries:0 ~net:env#net ~clock:env#clock ~meth:`GET ~uri ~headers:[] ()
       in
       Alcotest.(check bool) uri true
-        (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
+        (match result with Error (Aws.Error.Network_error _) -> true | _ -> false))
     [ "file:///tmp/aws.sock"; "/latest/meta-data" ]
 
 let test_request_rejects_invalid_port () =
@@ -208,12 +208,12 @@ let test_request_rejects_invalid_port () =
   List.iter
     (fun port ->
       let result =
-        Aws_http.signed_request ~max_retries:0 ~net:env#net ~clock:env#clock
+        Aws.Http.signed_request ~max_retries:0 ~net:env#net ~clock:env#clock
           ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
           ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"localhost" ~port ~path:"/" ()
       in
       Alcotest.(check bool) (string_of_int port) true
-        (match result with Error (Aws_error.Network_error _) -> true | _ -> false))
+        (match result with Error (Aws.Error.Network_error _) -> true | _ -> false))
     [ 0; -1; 65536 ]
 
 (* Regression test: an unresolvable host used to raise a bare Failure that
@@ -227,26 +227,26 @@ let test_unresolvable_host_is_a_clean_error () =
   Eio_main.run @@ fun env ->
   match
     Eio.Time.with_timeout env#clock 15.0 (fun () ->
-      Ok (Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+      Ok (Aws.Http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
             ~uri:"http://sun-eio-test-nonexistent-host.invalid/" ~headers:[] ()))
   with
   | Error `Timeout -> Alcotest.fail "unresolvable host should fail fast, not hang"
-  | Ok (Error (Aws_error.Network_error _)) -> ()
-  | Ok (Error e) -> Alcotest.failf "expected Network_error, got: %s" (Aws_error.to_string e)
+  | Ok (Error (Aws.Error.Network_error _)) -> ()
+  | Ok (Error e) -> Alcotest.failf "expected Network_error, got: %s" (Aws.Error.to_string e)
   | Ok (Ok _) -> Alcotest.fail "expected an unresolvable host to fail"
 
 let test_retries_429_once () =
   Eio_main.run @@ fun env ->
   with_retry_server env#net @@ fun ~port ~hits ->
   let result =
-    Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   let status, _headers, body =
     match result with
     | Ok v -> v
-    | Error e -> Alcotest.fail (Aws_error.to_string e)
+    | Error e -> Alcotest.fail (Aws.Error.to_string e)
   in
   Alcotest.(check int) "status" 200 status;
   Alcotest.(check string) "body" "ok" body;
@@ -284,14 +284,14 @@ let test_retries_uncommon_5xx_code () =
   Eio_main.run @@ fun env ->
   with_uncommon_status_retry_server env#net @@ fun ~port ~hits ->
   let result =
-    Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   let status, _headers, body =
     match result with
     | Ok v -> v
-    | Error e -> Alcotest.fail (Aws_error.to_string e)
+    | Error e -> Alcotest.fail (Aws.Error.to_string e)
   in
   Alcotest.(check int) "status" 200 status;
   Alcotest.(check string) "body" "ok" body;
@@ -328,12 +328,12 @@ let test_retries_body_only_throttling_error () =
   Eio_main.run @@ fun env ->
   with_body_only_throttle_server env#net @@ fun ~port ~hits ->
   let result =
-    Aws_http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
+    Aws.Http.request ~max_retries:1 ~net:env#net ~clock:env#clock ~meth:`GET
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   let status, _headers, body =
-    match result with Ok v -> v | Error e -> Alcotest.fail (Aws_error.to_string e)
+    match result with Ok v -> v | Error e -> Alcotest.fail (Aws.Error.to_string e)
   in
   Alcotest.(check int) "status" 200 status;
   Alcotest.(check string) "body" "ok" body;
@@ -346,13 +346,13 @@ let test_valid_non_object_400_body_is_clean_error () =
   in
   with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
-    Aws_http.request ~max_retries:0 ~timeout:2.0 ~net:env#net ~clock:env#clock
+    Aws.Http.request ~max_retries:0 ~timeout:2.0 ~net:env#net ~clock:env#clock
       ~meth:`GET ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   match result with
-  | Error (Aws_error.Http_error (400, "[]")) -> ()
-  | Error e -> Alcotest.failf "expected HTTP 400 error, got %s" (Aws_error.to_string e)
+  | Error (Aws.Error.Http_error (400, "[]")) -> ()
+  | Error e -> Alcotest.failf "expected HTTP 400 error, got %s" (Aws.Error.to_string e)
   | Ok _ -> Alcotest.fail "expected HTTP 400 error"
 
 (* Pins the contract that response headers reach the caller (e.g.
@@ -362,12 +362,12 @@ let test_response_headers_are_returned () =
   let raw_response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nETag: \"abc123\"\r\n\r\n" in
   with_raw_server env#net ~raw_response @@ fun ~port ->
   let result =
-    Aws_http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
+    Aws.Http.request ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`HEAD
       ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
       ~headers:[] ()
   in
   match result with
-  | Error e -> Alcotest.fail (Aws_error.to_string e)
+  | Error e -> Alcotest.fail (Aws.Error.to_string e)
   | Ok (_status, headers, _body) ->
     Alcotest.(check (option string)) "ETag header present"
       (Some "\"abc123\"")

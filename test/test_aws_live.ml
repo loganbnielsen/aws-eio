@@ -22,12 +22,12 @@ let test_sts_get_caller_identity () =
     Eio_main.run @@ fun env ->
     let net = env#net and clock = env#clock in
     let region = region () in
-    match Aws_credentials.(resolve ~net ~clock ~fs:env#fs (of_env ~region ())) with
-    | Error e -> Alcotest.failf "credential resolution failed: %s" (Aws_error.to_string e)
+    match Aws.Credentials.(resolve ~net ~clock ~fs:env#fs (of_env ~region ())) with
+    | Error e -> Alcotest.failf "credential resolution failed: %s" (Aws.Error.to_string e)
     | Ok creds -> (
       let host = Printf.sprintf "sts.%s.amazonaws.com" region in
       match
-        Aws_http.signed_request ~net ~clock
+        Aws.Http.signed_request ~net ~clock
           ~access_key_id:creds.access_key_id
           ~secret_access_key:creds.secret_access_key
           ?session_token:creds.session_token
@@ -36,7 +36,7 @@ let test_sts_get_caller_identity () =
           ~query:[ ("Action", "GetCallerIdentity"); ("Version", "2011-06-15") ]
           ()
       with
-      | Error e -> Alcotest.failf "STS GetCallerIdentity request failed: %s" (Aws_error.to_string e)
+      | Error e -> Alcotest.failf "STS GetCallerIdentity request failed: %s" (Aws.Error.to_string e)
       | Ok (status, _headers, body) ->
         Alcotest.(check int) "HTTP 200" 200 status;
         Alcotest.(check bool) "response contains GetCallerIdentityResult" true
