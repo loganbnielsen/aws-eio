@@ -41,7 +41,7 @@ retry test in `test_aws_http.ml` spins up a local mock HTTP server (no network).
 
 ## Public API
 
-### `Aws_error`
+### `Aws.Error`
 
 ```ocaml
 type t =
@@ -56,11 +56,11 @@ val to_string : t -> string
 `Signature_error` covers failures in `signed_request`'s pre-request setup — deriving
 the current timestamp and computing the SigV4 signature — as distinct from
 `Network_error`, which covers the actual HTTP I/O. In practice this path is very hard
-to exercise (it requires a clock or `Aws_sigv4.sign` input malformed enough to raise,
+to exercise (it requires a clock or `Aws.Sigv4.sign` input malformed enough to raise,
 which the rest of this package's own code never produces), so it's exercised by
 inspection and type-checking rather than a forced-failure test.
 
-### `Aws_sigv4`
+### `Aws.Sigv4`
 
 Pure — no I/O, no Eio dependency. Implements
 [Create a signed AWS API request](https://docs.aws.amazon.com/general/latest/gr/create-signed-request.html).
@@ -88,7 +88,7 @@ val sign
 
 `canonical_request`, `string_to_sign`, `signing_key`, `signature`,
 `authorization_header`, `sha256_hex`, `canonical_uri`, `canonical_query_string` are
-also exposed — used both by `Aws_http` (to guarantee the wire request matches what was
+also exposed — used both by `Aws.Http` (to guarantee the wire request matches what was
 signed, see below) and by `test/test_aws_sigv4.ml`, which checks every one of them
 against AWS's own conformance suite (mirrored into `test/vectors/`, Apache-2.0, see
 `NOTICE-aws-c-auth`).
@@ -101,7 +101,7 @@ sign the literal path unchanged (still percent-encoded byte-for-byte). There is 
 default — every caller states which behavior their service needs. Verified against
 `aws-c-auth`'s paired `*-normalized`/`*-unnormalized` fixtures.
 
-### `Aws_credentials`
+### `Aws.Credentials`
 
 ```ocaml
 type static = { access_key_id : string; secret_access_key : string; session_token : string option }
@@ -123,7 +123,7 @@ type resolved = {
 }
 
 val of_env : region:string -> unit -> t
-val resolve : net:_ Eio.Net.t -> clock:_ Eio.Time.clock -> t -> (resolved, Aws_error.t) result
+val resolve : net:_ Eio.Net.t -> clock:_ Eio.Time.clock -> t -> (resolved, Aws.Error.t) result
 ```
 
 No implicit default source — every `t` states one explicitly. `of_env` is the one
@@ -140,17 +140,17 @@ before falling through to container credentials and finally IMDSv2.
 
 `AssumeRoleWithWebIdentity` and the IMDSv2 token/metadata calls are unsigned by
 design — signing them would require the credentials they exist to produce. They go
-through `Aws_http.request` (unsigned), never `Aws_http.signed_request`. IMDSv2 calls
+through `Aws.Http.request` (unsigned), never `Aws.Http.signed_request`. IMDSv2 calls
 use a short (1s), fail-fast timeout — that endpoint is SSRF-adjacent.
 
-### `Aws_http`
+### `Aws.Http`
 
 ```ocaml
 val request
   :  ?max_retries:int (* default 3 *) -> ?timeout:float (* default 10.0s *)
   -> net:_ Eio.Net.t -> clock:_ Eio.Time.clock
   -> meth:Http.Method.t -> uri:string -> headers:(string * string) list -> ?body:string
-  -> unit -> (int * (string * string) list * string, Aws_error.t) result
+  -> unit -> (int * (string * string) list * string, Aws.Error.t) result
 
 val signed_request
   :  ?max_retries:int -> ?timeout:float
@@ -161,7 +161,7 @@ val signed_request
   -> ?query:(string * string) list -> ?extra_headers:(string * string) list
   -> ?payload_hash:string (* override the computed hash, e.g. "UNSIGNED-PAYLOAD" *)
   -> ?body:string
-  -> unit -> (int * (string * string) list * string, Aws_error.t) result
+  -> unit -> (int * (string * string) list * string, Aws.Error.t) result
 ```
 
 `request` adds a `Host` header from `uri` when the caller did not provide one.
@@ -173,10 +173,10 @@ line from `Uri.path_and_query`, which decodes then re-encodes using a more permi
 RFC 3986 "safe character" set than SigV4 requires — confirmed by hand:
 `Uri.of_string "...%21..." |> Uri.to_string` comes back with the `%21` un-escaped to a
 literal `!`. A request signed with one encoding and sent with another fails AWS's
-signature check for any query value containing `! * ' ( ) : @ $ , +`. `Aws_http`
+signature check for any query value containing `! * ' ( ) : @ $ , +`. `Aws.Http`
 instead hand-writes and hand-parses the HTTP/1.1 wire format itself, with the request
-line's resource built from `Aws_sigv4.canonical_uri`/`canonical_query_string` directly
-(the same functions used for signing inside `Aws_http`), not
+line's resource built from `Aws.Sigv4.canonical_uri`/`canonical_query_string` directly
+(the same functions used for signing inside `Aws.Http`), not
 from any general-purpose URI/HTTP request type.
 
 Request bodies get an explicit `Content-Length` (RFC 7230 3.3.2/3.3.3 — no
@@ -204,11 +204,18 @@ never retried.
 
 ## Design Notes
 
-- `Db`-style naming collision risk: `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`
-  are all reasonably specific compound names, lower collision risk than a bare single
-  word would be — no `Obs`-style rename needed here. TLS lives in the shared
-  `https-eio` package, not a private module of this package.
-- `Aws_http` and `Aws_credentials`'s public functions return `(_, Aws_error.t) result`
+- `Aws` is the sole public entry point (`Aws.Error`/`Aws.Sigv4`/`Aws.Http`/
+  `Aws.Credentials`), matching `kafka-eio`'s facade + `private_modules` pattern —
+  the flat `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`/`Aws_sigv4_core`
+  modules are implementation detail, not visible outside this library. An earlier
+  version of this note argued the flat names were specific enough to skip a
+  facade, reasoning only about naming-collision risk; encapsulation for a
+  package approaching public release is a separate concern that note didn't
+  weigh, and this package was the strongest remaining facade candidate in its
+  author's own cross-repo audit (`kafka-eio` and `kafka-eio-service` already
+  use this pattern). TLS lives in the shared `https-eio` package, not a
+  private module of this package.
+- `Aws.Http` and `Aws.Credentials`'s public functions return `(_, Aws.Error.t) result`
   and never raise, with one deliberate exception: `Eio.Cancel.Cancelled` is always
   re-raised, never converted to an `Error` — a cancellation has to unwind the
   caller's structured concurrency correctly, the same rule this author's `obs-eio`
@@ -216,12 +223,12 @@ never retried.
   socket/TLS/parsing code) is caught and converted to `Network_error`; an exception
   from `signed_request`'s own pre-request setup (e.g. a clock returning an
   out-of-range time) is caught and converted to `Signature_error` instead.
-  `Aws_sigv4` is the exception to the "returns result" half of this: it's a pure
+  `Aws.Sigv4` is the exception to the "returns result" half of this: it's a pure
   module with no I/O, its functions return plain values (not `result`), and it can
   raise on malformed input (e.g. `sign`'s `amz_date` must be a well-formed
-  15-character timestamp) — its only caller, `Aws_http`, always
+  15-character timestamp) — its only caller, `Aws.Http`, always
   supplies well-formed input, so this hasn't mattered in practice, but a future direct
-  caller of `Aws_sigv4` should not assume result-wrapped safety from it.
+  caller of `Aws.Sigv4` should not assume result-wrapped safety from it.
 
 ## Out of Scope (v1)
 
