@@ -175,6 +175,7 @@ let error_type_from_json_body body =
   | json -> (
     let field name =
       match Yojson.Safe.Util.member name json with
+      | exception Yojson.Safe.Util.Type_error _ -> None
       | `String s -> Some s
       | _ -> None
     in

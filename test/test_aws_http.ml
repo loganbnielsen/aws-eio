@@ -339,6 +339,22 @@ let test_retries_body_only_throttling_error () =
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
 
+let test_valid_non_object_400_body_is_clean_error () =
+  Eio_main.run @@ fun env ->
+  let raw_response =
+    "HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\n\r\n[]"
+  in
+  with_raw_server env#net ~raw_response @@ fun ~port ->
+  let result =
+    Aws_http.request ~max_retries:0 ~timeout:2.0 ~net:env#net ~clock:env#clock
+      ~meth:`GET ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[] ()
+  in
+  match result with
+  | Error (Aws_error.Http_error (400, "[]")) -> ()
+  | Error e -> Alcotest.failf "expected HTTP 400 error, got %s" (Aws_error.to_string e)
+  | Ok _ -> Alcotest.fail "expected HTTP 400 error"
+
 (* Pins the contract that response headers reach the caller (e.g.
    Content-Length/ETag from a HEAD response), not just status and body. *)
 let test_response_headers_are_returned () =
@@ -365,6 +381,8 @@ let () =
             test_retries_uncommon_5xx_code;
           Alcotest.test_case "body-only (no header) throttling error is retried" `Quick
             test_retries_body_only_throttling_error;
+          Alcotest.test_case "valid non-object 400 JSON body is a clean error" `Quick
+            test_valid_non_object_400_body_is_clean_error;
           Alcotest.test_case "unresolvable host fails cleanly, not with a bare Failure" `Quick
             test_unresolvable_host_is_a_clean_error;
         ] );
