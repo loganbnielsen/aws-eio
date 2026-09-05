@@ -339,7 +339,7 @@ let test_retries_body_only_throttling_error () =
   Alcotest.(check string) "body" "ok" body;
   Alcotest.(check int) "retried once" 2 !hits
 
-let test_valid_non_object_400_body_is_clean_error () =
+let test_valid_non_object_400_body_is_returned_ok () =
   Eio_main.run @@ fun env ->
   let raw_response =
     "HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\n\r\n[]"
@@ -351,9 +351,9 @@ let test_valid_non_object_400_body_is_clean_error () =
       ~headers:[] ()
   in
   match result with
-  | Error (Aws.Error.Http_error (400, "[]")) -> ()
-  | Error e -> Alcotest.failf "expected HTTP 400 error, got %s" (Aws.Error.to_string e)
-  | Ok _ -> Alcotest.fail "expected HTTP 400 error"
+  | Ok (400, _headers, "[]") -> ()
+  | Ok (status, _, body) -> Alcotest.failf "expected 400/\"[]\", got %d/%s" status body
+  | Error e -> Alcotest.failf "expected Ok, got %s" (Aws.Error.to_string e)
 
 (* Pins the contract that response headers reach the caller (e.g.
    Content-Length/ETag from a HEAD response), not just status and body. *)
@@ -381,8 +381,8 @@ let () =
             test_retries_uncommon_5xx_code;
           Alcotest.test_case "body-only (no header) throttling error is retried" `Quick
             test_retries_body_only_throttling_error;
-          Alcotest.test_case "valid non-object 400 JSON body is a clean error" `Quick
-            test_valid_non_object_400_body_is_clean_error;
+          Alcotest.test_case "valid non-object 400 JSON body is returned as Ok" `Quick
+            test_valid_non_object_400_body_is_returned_ok;
           Alcotest.test_case "unresolvable host fails cleanly, not with a bare Failure" `Quick
             test_unresolvable_host_is_a_clean_error;
         ] );

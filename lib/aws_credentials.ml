@@ -91,6 +91,9 @@ let resolve_web_identity ~net ~clock ~fs ~region ~role_arn ~token_file =
   let headers = [ ("Content-Type", "application/x-www-form-urlencoded") ] in
   match Aws_http.request ~net ~clock ~meth:`POST ~uri ~headers ~body () with
   | Error e -> Error e
+  | Ok (status, _, resp_body) when status < 200 || status >= 300 ->
+    Error (credential_error
+      (Printf.sprintf "AssumeRoleWithWebIdentity returned HTTP %d: %s" status (truncate ~max_len:500 resp_body)))
   | Ok (_, _, resp_body) -> (
     match
       ( extract_tag "AccessKeyId" resp_body,
@@ -125,6 +128,11 @@ let resolved_of_json_credentials json_body =
    beats tolerating a slow/absent link — real IMDS responses are near-instant. *)
 let imdsv2_timeout = 1.0
 
+let classify_imdsv2_response ~step (status, _headers, body) =
+  if status < 200 || status >= 300 then
+    Error (credential_error (Printf.sprintf "IMDSv2 %s returned HTTP %d: %s" step status (truncate ~max_len:500 body)))
+  else Ok body
+
 let resolve_imdsv2 ~net ~clock =
   let base = "http://169.254.169.254" in
   match
@@ -133,7 +141,8 @@ let resolve_imdsv2 ~net ~clock =
       ()
   with
   | Error e -> Error e
-  | Ok (_, _, token_resp) -> (
+  | Ok r -> (
+    let* token_resp = classify_imdsv2_response ~step:"token request" r in
     let token_headers = [ ("X-aws-ec2-metadata-token", String.trim token_resp) ] in
     match
       Aws_http.request ~net ~clock ~timeout:imdsv2_timeout ~meth:`GET
@@ -141,7 +150,8 @@ let resolve_imdsv2 ~net ~clock =
         ~headers:token_headers ()
     with
     | Error e -> Error e
-    | Ok (_, _, role_name_resp) -> (
+    | Ok r -> (
+      let* role_name_resp = classify_imdsv2_response ~step:"role name lookup" r in
       let role_name = String.trim role_name_resp in
       match
         Aws_http.request ~net ~clock ~timeout:imdsv2_timeout ~meth:`GET
@@ -149,7 +159,9 @@ let resolve_imdsv2 ~net ~clock =
           ~headers:token_headers ()
       with
       | Error e -> Error e
-      | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json))
+      | Ok r ->
+        let* creds_json = classify_imdsv2_response ~step:"credentials lookup" r in
+        resolved_of_json_credentials creds_json))
 
 let resolve_container ~net ~clock ~relative_uri =
   (* 169.254.170.2 is the fixed ECS/Fargate task metadata endpoint. *)
@@ -163,6 +175,9 @@ let resolve_container ~net ~clock ~relative_uri =
   else
   match Aws_http.request ~net ~clock ~meth:`GET ~uri:("http://169.254.170.2" ^ relative_uri) ~headers:[] () with
   | Error e -> Error e
+  | Ok (status, _, creds_json) when status < 200 || status >= 300 ->
+    Error (credential_error
+      (Printf.sprintf "ECS container credentials endpoint returned HTTP %d: %s" status (truncate ~max_len:500 creds_json)))
   | Ok (_, _, creds_json) -> resolved_of_json_credentials creds_json
 
 let resolve_env_chain ~net ~clock ~fs ~region =

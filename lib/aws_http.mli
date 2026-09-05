@@ -24,11 +24,15 @@ val request
     exist to sign with. [uri] is always a fixed literal URL at every call
     site, so re-encoding is not a concern here. Retries network failures and
     responses classified retryable by {!Aws_error} status/body inspection
-    (429, 5xx, and 400s with a known-retryable [x-amzn-errortype]); a
-    non-2xx, non-retryable response returns [Error (Http_error (status,
-    body))]. [uri] must be an absolute [http://] or [https://] URL with a
-    host; unsupported or relative URIs return [Error (Network_error _)]. Pass
-    a short [?timeout] for SSRF-adjacent endpoints like IMDS. *)
+    (429, 5xx, and 400s with a known-retryable [x-amzn-errortype]); once a
+    response is received and is not (or is no longer) retryable, [Ok
+    (status, headers, body)] is returned regardless of status code — the
+    caller owns interpreting a non-2xx status. [Error] means no usable HTTP
+    response was ever received: [uri] must be an absolute [http://] or
+    [https://] URL with a host, unsupported or relative URIs return [Error
+    (Network_error _)], and a signature/network/timeout failure returns the
+    corresponding {!Aws_error} variant. Pass a short [?timeout] for
+    SSRF-adjacent endpoints like IMDS. *)
 
 val signed_request
   :  ?max_retries:int
@@ -67,10 +71,12 @@ val signed_request
     before sending it. Defaults to HTTPS; plain HTTP is only for explicitly
     configured local/S3-compatible endpoints. Response headers are returned
     exactly as the server sent them (no case-normalization — compare case-
-    insensitively), on success only, same caveat as {!request} above.
+    insensitively). Same [Ok]/[Error] contract as {!request} above: any
+    received response — success or not — comes back as [Ok (status,
+    headers, body)], and [Error] means no usable response was received.
     Re-signs (fresh [X-Amz-Date]/[Authorization]) on every retry attempt,
     not just the first — with a long [?timeout] and several retries, reusing
     one signature across the whole sequence could let [X-Amz-Date] drift
     outside AWS's clock-skew tolerance by the final attempt, which would
-    surface as an ordinary non-retryable [Http_error] with no hint the real
-    cause was a stale signature. *)
+    surface as an ordinary [Ok] response with no hint the real cause was a
+    stale signature. *)

@@ -3,7 +3,6 @@
     reinventing HTTP/signature/network/credential failure cases. *)
 
 type t =
-  | Http_error of int * string   (** non-2xx HTTP response: status, body *)
   | Signature_error of string    (** SigV4 signing failed *)
   | Network_error of string      (** connection/timeout failure *)
   | Credential_error of string   (** credential resolution failed *)
