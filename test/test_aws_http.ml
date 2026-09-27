@@ -130,6 +130,25 @@ let test_204_response_never_reads_a_body () =
     Alcotest.(check int) "status" 204 status;
     Alcotest.(check string) "204 response body is empty despite Content-Length" "" body
 
+(* A malformed status line is an error in its own words, not an OCaml
+   exception's rendering ("Failure(\"bad status line: ...\")"), and it is
+   permanent: retrying a server that does not speak HTTP cannot help. *)
+let test_malformed_status_line_is_its_own_error () =
+  Eio_main.run @@ fun env ->
+  let raw_response = "HTTP/1.1 abc Nonsense\r\nContent-Length: 0\r\n\r\n" in
+  with_raw_server env#net ~raw_response @@ fun ~port ->
+  let result =
+    Aws.Http.request ~max_retries:0 ~timeout:2.0 ~net:env#net ~clock:env#clock ~meth:`GET
+      ~uri:(Printf.sprintf "http://127.0.0.1:%d/" port)
+      ~headers:[] ()
+  in
+  match result with
+  | Ok _ -> Alcotest.fail "a malformed status line was accepted"
+  | Error e ->
+    Alcotest.(check string) "the parser's own message"
+      "network error: bad status line: HTTP/1.1 abc Nonsense"
+      (Aws.Error.to_string e)
+
 (* Without Content-Length, a spec-compliant server (RFC 7230 3.3.2/3.3.3)
    treats a request as having no body at all. Echoes back the body via
    cohttp-eio's own Content-Length-framed parsing, so a pass means a real
@@ -404,6 +423,8 @@ let () =
         [ Alcotest.test_case "HEAD response never reads a body" `Quick
             test_head_response_never_reads_a_body;
           Alcotest.test_case "204 response never reads a body" `Quick test_204_response_never_reads_a_body;
+          Alcotest.test_case "malformed status line is its own error" `Quick
+            test_malformed_status_line_is_its_own_error;
           Alcotest.test_case "response headers are returned to the caller" `Quick
             test_response_headers_are_returned;
         ] );
