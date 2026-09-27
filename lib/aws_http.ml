@@ -101,11 +101,12 @@ let write_request flow ~meth ~resource ~headers ~body =
 let read_response ~meth flow =
   let reader = Eio.Buf_read.of_flow flow ~max_size:(16 * 1024 * 1024) in
   let status_line = Eio.Buf_read.line reader in
-  let status =
+  let open Result.Syntax in
+  let* status =
     match String.split_on_char ' ' status_line with
-    | _proto :: code :: _ -> (
-      try int_of_string code with Failure _ -> failwith ("bad status line: " ^ status_line))
-    | _ -> failwith ("malformed status line: " ^ status_line)
+    | _proto :: code :: _ ->
+      Option.to_result ~none:("bad status line: " ^ status_line) (int_of_string_opt code)
+    | _ -> Error ("malformed status line: " ^ status_line)
   in
   let rec read_headers acc =
     match Eio.Buf_read.line reader with
@@ -135,20 +136,24 @@ let read_response ~meth flow =
       | Some n -> Eio.Buf_read.take n reader
       | None -> ( try Eio.Buf_read.take_all reader with End_of_file -> "")
   in
-  (status, headers, body)
+  Ok (status, headers, body)
 
+(* A malformed response or an unavailable TLS wrapper is an [Error] carrying its
+   own text; the exceptions left are Eio's I/O failures, which [request_once]
+   classifies. *)
 let do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body =
+  let open Result.Syntax in
   let flow = connect ~sw ~net ~scheme ~host ~port in
-  let flow =
-    if not https then (flow :> Eio.Flow.two_way_ty Eio.Std.r)
+  let* flow =
+    if not https then Ok (flow :> Eio.Flow.two_way_ty Eio.Std.r)
     else (
       let dummy_uri = Uri.make ~scheme:"https" ~host () in
       match Https_eio.https_for_uri dummy_uri with
-      | Error e -> failwith (Https_eio.error_to_string e)
-      | Ok None -> failwith "Aws_http: https requested but TLS wrapper unavailable"
+      | Error e -> Error (Https_eio.error_to_string e)
+      | Ok None -> Error "Aws_http: https requested but TLS wrapper unavailable"
       | Ok (Some wrap) ->
         let raw = (flow :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r) in
-        (wrap dummy_uri raw :> Eio.Flow.two_way_ty Eio.Std.r))
+        Ok (wrap dummy_uri raw :> Eio.Flow.two_way_ty Eio.Std.r))
   in
   write_request flow ~meth ~resource ~headers ~body;
   read_response ~meth flow
@@ -213,7 +218,9 @@ let request_once ~net ~clock ~timeout ~https ~scheme ~host ~port ~meth ~resource
     | Ok () -> (
       try
         Eio.Time.with_timeout_exn clock timeout (fun () ->
-            Eio.Switch.run (fun sw -> Ok (do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body)))
+            Eio.Switch.run (fun sw ->
+                do_once ~sw ~net ~https ~scheme ~host ~port ~meth ~resource ~headers ~body
+                |> Result.map_error (fun msg -> Permanent (Aws_error.Network_error msg))))
       with
       | Eio.Time.Timeout -> Error (Retryable (Aws_error.Network_error "request timed out"))
       (* Re-raised, never converted to Error: cancellation must unwind the
