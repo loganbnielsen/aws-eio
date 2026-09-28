@@ -160,8 +160,8 @@ let resolve_imdsv2 ~net ~clock =
       with
       | Error e -> Error e
       | Ok r ->
-        let* creds_json = classify_imdsv2_response ~step:"credentials lookup" r in
-        resolved_of_json_credentials creds_json))
+        Result.bind (classify_imdsv2_response ~step:"credentials lookup" r)
+          resolved_of_json_credentials))
 
 let resolve_container ~net ~clock ~relative_uri =
   (* 169.254.170.2 is the fixed ECS/Fargate task metadata endpoint. *)
