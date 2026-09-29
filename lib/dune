@@ -2,6 +2,5 @@
  (name aws_eio)
  (public_name aws-eio)
  (wrapped false)
- (modules Aws Aws_error Aws_sigv4 Aws_sigv4_core Aws_http Aws_credentials)
- (private_modules Aws_error Aws_sigv4 Aws_sigv4_core Aws_http Aws_credentials)
+ (modules Aws Aws_error Aws_sigv4 Aws_sigv4_core Aws_http Aws_credentials Aws_signing_credentials)
  (libraries digestif eio eio.unix unix uri http ptime yojson https-eio))

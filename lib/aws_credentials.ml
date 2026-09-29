@@ -23,7 +23,7 @@ type t = {
   region : string;
 }
 
-type resolved = {
+type resolved = Aws_signing_credentials.t = {
   access_key_id : string;
   secret_access_key : string;
   session_token : string option;

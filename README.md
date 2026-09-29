@@ -204,17 +204,18 @@ never retried.
 
 ## Design Notes
 
-- `Aws` is the sole public entry point (`Aws.Error`/`Aws.Sigv4`/`Aws.Http`/
-  `Aws.Credentials`), matching `kafka-eio`'s facade + `private_modules` pattern —
-  the flat `Aws_error`/`Aws_sigv4`/`Aws_http`/`Aws_credentials`/`Aws_sigv4_core`
-  modules are implementation detail, not visible outside this library. An earlier
-  version of this note argued the flat names were specific enough to skip a
-  facade, reasoning only about naming-collision risk; encapsulation for a
-  package approaching public release is a separate concern that note didn't
-  weigh, and this package was the strongest remaining facade candidate in its
-  author's own cross-repo audit (`kafka-eio` and `kafka-eio-service` already
-  use this pattern). TLS lives in the shared `https-eio` package, not a
-  private module of this package.
+- `Aws` is the entry point (`Aws.Error`/`Aws.Sigv4`/`Aws.Http`/`Aws.Credentials`),
+  and each one is an alias for the module that implements it — as `kafka-eio`'s
+  `Kafka` is. The earlier design hid the flat modules behind hand-written copies
+  of their interfaces; that duplication had to be replaced rather than extended,
+  because a copied datatype declaration and `module type of` both produce a
+  *fresh* type (`Aws.Error.t` stopped being the `Aws_error.t` the library's own
+  functions return), and an installed interface that names a private module
+  cannot be resolved by a consumer at all. Installing the modules and aliasing
+  them keeps one interface per module and no hidden type identities.
+  `Aws_signing_credentials` is separate for a different reason: `Aws_credentials`
+  depends on `Aws_http` for STS and IMDS, so a type both it and the signer name
+  cannot live in either. TLS lives in the shared `https-eio` package.
 - `Aws.Http` and `Aws.Credentials`'s public functions return `(_, Aws.Error.t) result`
   and never raise, with one deliberate exception: `Eio.Cancel.Cancelled` is always
   re-raised, never converted to an `Error` — a cancellation has to unwind the

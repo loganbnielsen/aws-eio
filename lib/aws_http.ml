@@ -306,8 +306,26 @@ let build_signed_headers ~clock ~access_key_id ~secret_access_key ?session_token
   | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
   | exn -> Error (Aws_error.Signature_error (Printexc.to_string exn))
 
-let signed_request ?max_retries ?timeout ?(scheme = `Https) ~net ~clock ~access_key_id ~secret_access_key ?session_token ~region
-    ~service ~normalize_path ~meth ~host ?port ~path ?(query = []) ?(extra_headers = []) ?payload_hash ?body () =
+type request =
+  { meth : Http.Method.t
+  ; host : string
+  ; port : int option
+  ; path : string
+  ; query : (string * string) list
+  ; extra_headers : (string * string) list
+  ; payload_hash : string option
+  ; body : string option
+  }
+
+let normalize_path_of_service service = not (String.equal service "s3")
+
+let signed_request ?max_retries ?timeout ?(scheme = `Https) ~net ~clock ~credentials ~region ~service
+    ~request () =
+  let { meth; host; port; path; query; extra_headers; payload_hash; body } = request in
+  let normalize_path = normalize_path_of_service service in
+  let access_key_id = credentials.Aws_signing_credentials.access_key_id in
+  let secret_access_key = credentials.Aws_signing_credentials.secret_access_key in
+  let session_token = credentials.Aws_signing_credentials.session_token in
   let scheme = match scheme with `Http -> "http" | `Https -> "https" in
   let host_header = host_header ~scheme ~host ~port in
   (* Re-signed on every attempt, not just the first — reusing one
