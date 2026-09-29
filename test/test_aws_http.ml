@@ -189,9 +189,24 @@ let test_signed_request_supports_explicit_http_scheme () =
   with_capture_server env#net @@ fun ~port ~seen ->
   let result =
     Aws.Http.signed_request ~scheme:`Http ~net:env#net ~clock:env#clock
-      ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
-      ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"127.0.0.1"
-      ~port ~path:"/bucket/key" ()
+      ~credentials:
+        { Aws.Credentials.access_key_id = "test"
+        ; secret_access_key = "test"
+        ; session_token = None
+        ; expiration = None
+        }
+      ~region:"us-east-1" ~service:"s3"
+      ~request:
+        { Aws.Http.meth = `GET
+        ; host = "127.0.0.1"
+        ; port = Some port
+        ; path = "/bucket/key"
+        ; query = []
+        ; extra_headers = []
+        ; payload_hash = None
+        ; body = None
+        }
+      ()
   in
   (match result with
    | Ok _ -> ()
@@ -200,6 +215,50 @@ let test_signed_request_supports_explicit_http_scheme () =
   Alcotest.(check string) "signed HTTP request line" "GET /bucket/key HTTP/1.1" request_line;
   Alcotest.(check bool) "signed HTTP request has Authorization" true
     (List.exists (String.starts_with ~prefix:"Authorization: AWS4-HMAC-SHA256") headers)
+
+let test_path_signing_follows_the_service () =
+  Eio_main.run @@ fun env ->
+  let credentials =
+    { Aws.Credentials.access_key_id = "key"
+    ; secret_access_key = "secret"
+    ; session_token = None
+    ; expiration = None
+    }
+  in
+  let sign ~port service =
+    match
+      Aws.Http.signed_request ~scheme:`Http ~net:env#net ~clock:env#clock ~credentials
+        ~region:"us-east-1" ~service
+        ~request:
+          { Aws.Http.meth = `GET
+          ; host = "127.0.0.1"
+          ; port = Some port
+          ; path = "/a/../b"
+          ; query = []
+          ; extra_headers = []
+          ; payload_hash = None
+          ; body = None
+          }
+        ()
+    with
+    | Ok _ -> ()
+    | Error e -> Alcotest.fail (Aws.Error.to_string e)
+  in
+  let authorization headers =
+    List.find_opt (String.starts_with ~prefix:"Authorization:") headers
+  in
+  with_capture_server env#net @@ fun ~port ~seen ->
+  sign ~port "s3";
+  let s3_line, s3_headers = Eio.Promise.await seen in
+  with_capture_server env#net @@ fun ~port:other_port ~seen:other_seen ->
+  sign ~port:other_port "dynamodb";
+  let _other_line, other_headers = Eio.Promise.await other_seen in
+  Alcotest.(check string)
+    "S3 signs and sends the path as written" "GET /a/../b HTTP/1.1" s3_line;
+  Alcotest.(check bool)
+    "another service normalizes the same path, so the signature differs"
+    false
+    (authorization s3_headers = authorization other_headers)
 
 let test_request_rejects_crlf_header () =
   Eio_main.run @@ fun env ->
@@ -228,8 +287,24 @@ let test_request_rejects_invalid_port () =
     (fun port ->
       let result =
         Aws.Http.signed_request ~max_retries:0 ~net:env#net ~clock:env#clock
-          ~access_key_id:"test" ~secret_access_key:"test" ~region:"us-east-1"
-          ~service:"s3" ~normalize_path:false ~meth:`GET ~host:"localhost" ~port ~path:"/" ()
+          ~credentials:
+            { Aws.Credentials.access_key_id = "test"
+            ; secret_access_key = "test"
+            ; session_token = None
+            ; expiration = None
+            }
+          ~region:"us-east-1" ~service:"s3"
+          ~request:
+            { Aws.Http.meth = `GET
+            ; host = "localhost"
+            ; port = Some port
+            ; path = "/"
+            ; query = []
+            ; extra_headers = []
+            ; payload_hash = None
+            ; body = None
+            }
+          ()
       in
       Alcotest.(check bool) (string_of_int port) true
         (match result with Error (Aws.Error.Network_error _) -> true | _ -> false))
@@ -413,6 +488,8 @@ let () =
         [ Alcotest.test_case "Host header is added" `Quick test_request_adds_host_header;
           Alcotest.test_case "signed requests can explicitly use HTTP" `Quick
             test_signed_request_supports_explicit_http_scheme;
+          Alcotest.test_case "path signing follows the service name" `Quick
+            test_path_signing_follows_the_service;
           Alcotest.test_case "CRLF in headers is rejected" `Quick test_request_rejects_crlf_header;
           Alcotest.test_case "invalid URI is rejected before network I/O" `Quick
             test_request_rejects_invalid_uri;

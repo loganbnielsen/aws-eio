@@ -27,13 +27,17 @@ let test_sts_get_caller_identity () =
     | Ok creds -> (
       let host = Printf.sprintf "sts.%s.amazonaws.com" region in
       match
-        Aws.Http.signed_request ~net ~clock
-          ~access_key_id:creds.access_key_id
-          ~secret_access_key:creds.secret_access_key
-          ?session_token:creds.session_token
-          ~region ~service:"sts" ~normalize_path:true
-          ~meth:`GET ~host ~path:"/"
-          ~query:[ ("Action", "GetCallerIdentity"); ("Version", "2011-06-15") ]
+        Aws.Http.signed_request ~net ~clock ~credentials:creds ~region ~service:"sts"
+          ~request:
+            { Aws.Http.meth = `GET
+            ; host
+            ; port = None
+            ; path = "/"
+            ; query = [ ("Action", "GetCallerIdentity"); ("Version", "2011-06-15") ]
+            ; extra_headers = []
+            ; payload_hash = None
+            ; body = None
+            }
           ()
       with
       | Error e -> Alcotest.failf "STS GetCallerIdentity request failed: %s" (Aws.Error.to_string e)

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **API change**: `Aws.Http.signed_request` takes one credential set
+  (`~credentials`) and one request value (`~request`) instead of nineteen
+  arguments, and `normalize_path` is gone: S3 (and S3-compatible endpoints, which
+  use the same service name) signs the path as written and every other service
+  signs the normalized form, derived from `service`.
+- **API change**: `Aws.Credentials.resolved` is `Aws_signing_credentials.t` — the
+  credential values a signature needs live in their own module because
+  `Aws_credentials` already depends on `Aws_http` for its STS and IMDS calls.
+- **API change**: every module the library defines is installed, and `Aws` is a
+  set of aliases over them instead of a hand-written facade. The copies could not
+  be replaced by delegation while the modules were private: a copied datatype
+  declaration and `module type of` both give a fresh type, and naming a private
+  module from an installed interface leaves consumers unable to resolve it.
+
 - Local HTTP transport tests now skip when the OS sandbox rejects loopback
   listener setup with `EPERM`/`EACCES`, which keeps opam-repository macOS
   sandbox builds from failing on tests that require `bind(2)`.

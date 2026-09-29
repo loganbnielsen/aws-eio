@@ -34,6 +34,23 @@ val request
     corresponding {!Aws_error} variant. Pass a short [?timeout] for
     SSRF-adjacent endpoints like IMDS. *)
 
+(** The request being signed, as one value: the method, where to send it, and
+    what to send. [port] opens the TCP connection and, when non-default, is
+    included in the signed and sent [Host] header (1-65535). [payload_hash]
+    overrides the computed [sha256_hex body] — pass the literal
+    ["UNSIGNED-PAYLOAD"] for S3's streaming-upload mode, still sending it as
+    the [X-Amz-Content-Sha256] value. *)
+type request =
+  { meth : Http.Method.t
+  ; host : string
+  ; port : int option
+  ; path : string
+  ; query : (string * string) list
+  ; extra_headers : (string * string) list
+  ; payload_hash : string option
+  ; body : string option
+  }
+
 val signed_request
   :  ?max_retries:int
   -> ?timeout:float
@@ -42,32 +59,19 @@ val signed_request
           endpoints that require signed requests without TLS. *)
   -> net:_ Eio.Net.t
   -> clock:_ Eio.Time.clock
-  -> access_key_id:string
-  -> secret_access_key:string
-  -> ?session_token:string
+  -> credentials:Aws_signing_credentials.t
+      (** A resolved credential set — what {!Aws_credentials.resolve} returns. *)
   -> region:string
   -> service:string
-  -> normalize_path:bool
-      (** [true] for most services, [false] for S3 — see {!Aws_sigv4.signing_request.normalize_path}. *)
-  -> meth:Http.Method.t
-  -> host:string
-  -> ?port:int
-      (** Used to open the TCP connection and, when non-default, included in
-          the signed and sent [Host] header. Must be between 1 and 65535
-          when supplied. *)
-  -> path:string
-  -> ?query:(string * string) list
-  -> ?extra_headers:(string * string) list
-  -> ?payload_hash:string
-      (** Override the computed [sha256_hex body] — pass the literal
-          ["UNSIGNED-PAYLOAD"] for S3's streaming-upload mode (still sent as
-          the [X-Amz-Content-Sha256] value the caller should also add to
-          [extra_headers] if the target service requires that header). *)
-  -> ?body:string
+      (** Also decides path signing: S3 (and S3-compatible endpoints, which
+          use the same service name) signs the path as written, every other
+          service signs the normalized form, so there is no [normalize_path]
+          argument for a caller to get wrong. *)
+  -> request:request
   -> unit
   -> (int * (string * string) list * string, Aws_error.t) result
 (** SigV4-signs the request (adding [Host], [X-Amz-Date], and
-    [X-Amz-Security-Token] if [session_token] is given, then [Authorization])
+    [X-Amz-Security-Token] if the credentials carry one, then [Authorization])
     before sending it. Defaults to HTTPS; plain HTTP is only for explicitly
     configured local/S3-compatible endpoints. Response headers are returned
     exactly as the server sent them (no case-normalization — compare case-
